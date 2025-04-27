@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dillon's Deal Analyzer</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <header>
+      <h1>
+        <i class="fa-solid fa-plane logo-icon"></i>
+        Dillon's Deal Analyzer
+      </h1>
+      <p class="tagline">Should you book that flight with points?</p>
+    </header>
+
+    <main>
+      <div class="calculator-card">
+        <div class="instructions">
+          <h2><i class="fa-solid fa-info-circle"></i> How It Works</h2>
+          <ol>
+            <li>Find the cash price of your flight</li>
+            <li>Find how many points it costs to book</li>
+            <li>Enter any taxes and fees you'd owe on the points booking</li>
+            <li>Get your results instantly!</li>
+          </ol>
+        </div>
+
+        <form id="dealForm" class="input-form">
+          <div class="input-group">
+            <label for="cashPrice">
+              <i class="fa-solid fa-dollar-sign"></i>
+              <span>Cash Price</span>
+              <span class="tooltip" data-tooltip="The total price you would pay if booking with cash">
+                <i class="fa-solid fa-circle-question"></i>
+              </span>
+            </label>
+            <div class="input-wrapper">
+              <span class="currency-symbol">$</span>
+              <input type="text" id="cashPrice" placeholder="0.00" autocomplete="off">
+              <span class="error-message" id="cashPriceError"></span>
+            </div>
+          </div>
+
+          <div class="input-group">
+            <label for="pointsUsed">
+              <i class="fa-solid fa-coins"></i>
+              <span>Points Required</span>
+              <span class="tooltip" data-tooltip="The number of points needed for the booking">
+                <i class="fa-solid fa-circle-question"></i>
+              </span>
+            </label>
+            <div class="input-wrapper">
+              <input type="number" id="pointsUsed" placeholder="0" autocomplete="off">
+              <span class="error-message" id="pointsUsedError"></span>
+            </div>
+          </div>
+
+          <div class="input-group">
+            <label for="taxesFees">
+              <i class="fa-solid fa-receipt"></i>
+              <span>Taxes & Fees</span>
+              <span class="tooltip" data-tooltip="Any additional costs when booking with points">
+                <i class="fa-solid fa-circle-question"></i>
+              </span>
+            </label>
+            <div class="input-wrapper">
+              <span class="currency-symbol">$</span>
+              <input type="text" id="taxesFees" placeholder="0.00" autocomplete="off">
+              <span class="error-message" id="taxesFeesError"></span>
+            </div>
+          </div>
+
+          <button type="submit" id="analyzeBtn" class="analyze-btn">
+            <span class="btn-text">Analyze Deal</span>
+            <span class="btn-icon"><i class="fa-solid fa-magnifying-glass"></i></span>
+            <span class="loading-spinner"><i class="fa-solid fa-spinner fa-spin"></i></span>
+          </button>
+        </form>
+
+        <div class="results-container" id="resultsContainer">
+          <div class="results hidden" id="results">
+            <h3>Analysis Results</h3>
+            <div class="result-value">
+              <span id="cppValue">0.00¢</span>
+              <span class="per-point">per point</span>
+            </div>
+            <div class="verdict" id="verdict">Enter your details above to analyze your deal</div>
+
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <footer>
+      <p class="copyright">&copy; 2023 Dillon's Deal Analyzer</p>
+    </footer>
+  </div>
+
+  <script src="js/script.js"></script>
+</body>
+</html>
