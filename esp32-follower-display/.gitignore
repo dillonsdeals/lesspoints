@@ -1,0 +1,6 @@
+# your secrets
+follower_display/config.h
+# PlatformIO build output
+.pio/
+.vscode/
+__pycache__/
