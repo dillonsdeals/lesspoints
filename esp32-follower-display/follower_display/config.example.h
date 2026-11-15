@@ -37,10 +37,12 @@
 // SOURCE_OFF    : hide Instagram
 #define INSTAGRAM_SOURCE        SOURCE_API
 #define INSTAGRAM_USERNAME      "yourhandle"
-#define INSTAGRAM_ACCESS_TOKEN  "IGAA..."     // long-lived token from the Meta developer dashboard
-// Only needed if you use the Facebook-Login flavour of the API instead of "Instagram Login":
-// #define INSTAGRAM_API_BASE "https://graph.facebook.com/v22.0/<YOUR_IG_USER_ID>"
-// #define INSTAGRAM_AUTO_REFRESH_TOKEN 0
+#define INSTAGRAM_ACCESS_TOKEN  "EAA..."      // token from the Meta developer dashboard (see README)
+// Graph API Explorer route (never-expiring Page token, the route the README describes):
+// fill in your Instagram user id and keep these two lines enabled.
+#define INSTAGRAM_API_BASE "https://graph.facebook.com/v22.0/<YOUR_IG_USER_ID>"
+#define INSTAGRAM_AUTO_REFRESH_TOKEN 0
+// Older apps with "API setup with Instagram login" (60-day IGAA... token): delete the two lines above.
 
 // ---------------- TikTok ----------------
 // SOURCE_API    : official TikTok Display API (needs a developer app + refresh token)

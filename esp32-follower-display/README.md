@@ -111,20 +111,40 @@ A sensible starting point is `SOURCE_API` for Instagram and `SOURCE_SCRAPE` for 
 
 ### Instagram: official API token
 
-Requires an Instagram **Professional** account (Business or Creator). Switching is free:
-*Instagram app > Settings > Account type and tools > Switch to professional account*.
+Requires an Instagram **Professional** account (Business or Creator, free to switch:
+*Instagram app > Settings > Account type and tools > Switch to professional account*) that is
+**linked to a Facebook Page** (*Instagram app > Edit profile > Page > Connect or create*; any page
+name is fine, it can stay empty).
 
-1. Go to <https://developers.facebook.com/apps>, **Create App**, pick the **Business** type, and
-   add the **Instagram** product.
-2. In the Instagram product page choose **API setup with Instagram login**.
-3. Under **Generate access tokens**, add your Instagram account, accept the tester invite inside the
-   Instagram app (*Settings > Website permissions > Apps and websites > Tester invites*), then click
-   **Generate token**. Approve the `instagram_business_basic` permission.
-4. Copy the token (it starts with `IGAA`) into `INSTAGRAM_ACCESS_TOKEN`.
+Newer Meta apps no longer offer the "API setup with Instagram login" shortcut, so use the
+Facebook-login route below. It is all clicking in the browser and the resulting token never expires.
 
-The token is valid for 60 days. The display refreshes it automatically every 30 days while it is
-running and stores the new one in flash, so you only redo this if the display is left unplugged for
-more than two months.
+1. Go to <https://developers.facebook.com/apps>, **Create App**, pick the use case
+   **"Manage messaging and content on Instagram"**, and finish the wizard.
+2. Open **Tools > Graph API Explorer**. On the right, choose your app under *Meta App*, and under
+   *Permissions* add `pages_show_list`, `instagram_basic`, `pages_read_engagement` and
+   `business_management`. Click **Generate Access Token**, log in, and select your Instagram account
+   and its Page.
+3. Make the token permanent: copy the token from the *Access Token* box, open
+   **Tools > Access Token Debugger**, paste it, click **Debug**, then **Extend Access Token** at the
+   bottom and copy the extended token. Paste that back into the Explorer's *Access Token* box.
+4. In the Explorer query box enter `me/accounts?fields=name,access_token,instagram_business_account`
+   and press **Submit**. The reply contains the Page's `access_token` (this one never expires) and
+   `instagram_business_account.id` (your Instagram user id).
+5. Optional check: query `<IG_USER_ID>?fields=username,followers_count` with the Page token in the
+   *Access Token* box. You should see your follower count.
+6. In `config.h`:
+
+   ```c
+   #define INSTAGRAM_SOURCE        SOURCE_API
+   #define INSTAGRAM_ACCESS_TOKEN  "<the Page access token>"
+   #define INSTAGRAM_API_BASE      "https://graph.facebook.com/v22.0/<IG_USER_ID>"
+   #define INSTAGRAM_AUTO_REFRESH_TOKEN 0
+   ```
+
+If you have an older app that still shows **API setup with Instagram login**, its *Generate token*
+button gives a 60-day token for `graph.instagram.com`; leave `INSTAGRAM_API_BASE` at its default and
+auto-refresh on, and the display renews it every 30 days.
 
 ### TikTok: official API refresh token
 
