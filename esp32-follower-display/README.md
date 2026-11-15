@@ -206,9 +206,11 @@ counter and "Look up" mode (it remembers which one you left it on).
 
 ## Animations
 
-* **Every new follower**: the number rolls up from the old value to the new one, then the card
-  bursts with confetti and a big green `+1` (or `+N`) for about a second, with the LED pulsing green.
-  The total rolls with it.
+* **Every new follower**: the number rolls up from the old value to the new one, then the whole
+  screen throws a Rugrats-style party: purple background, an orange Nick splat bursting out of the
+  middle, "NEW BABY!" and the `+1` in wobbly multicolour title lettering, bottles, rattles and
+  pacifiers raining down the sides, a catchphrase along the bottom and the LED cycling colours. Three
+  seconds, every time. `FOLLOWER_PARTY 0` swaps it for a small coin burst on the card instead.
 * **Milestones**: when Instagram, TikTok or the combined total crosses a round number, the screen
   fills with confetti showing the milestone for a few seconds and the LED cycles colours. Round
   numbers are every 100 below 1,000, every 500 below 10,000, every 1,000 below 100,000, every

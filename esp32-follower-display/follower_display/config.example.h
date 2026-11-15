@@ -53,6 +53,8 @@
 
 // ---------------- Fun ----------------
 #define ANIMATE_COUNT_UP      1   // numbers roll up when you gain followers
+#define FOLLOWER_PARTY        1   // Rugrats-style party on every new follower (0 = small coin burst instead)
+#define FOLLOWER_PARTY_SECONDS 3
 #define CELEBRATE_MILESTONES  1   // confetti when a count crosses a round number (100s, 500s, 1,000s...)
 #define CELEBRATION_SECONDS   6   // how long the confetti lasts (tap the screen to skip)
 

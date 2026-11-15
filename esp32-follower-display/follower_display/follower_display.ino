@@ -153,6 +153,12 @@
 #ifndef ANIMATE_COUNT_UP
 #define ANIMATE_COUNT_UP 1          // numbers roll up when followers increase
 #endif
+#ifndef FOLLOWER_PARTY
+#define FOLLOWER_PARTY 1            // 1 = Rugrats-style full-screen party for every new follower, 0 = small coin burst
+#endif
+#ifndef FOLLOWER_PARTY_SECONDS
+#define FOLLOWER_PARTY_SECONDS 3
+#endif
 #ifndef CELEBRATE_MILESTONES
 #define CELEBRATE_MILESTONES 1      // confetti when a count crosses a round number
 #endif
@@ -1193,6 +1199,132 @@ static void drawMoney(TFT_eSPI& g, const Money& m) {
   }
 }
 
+// ---- Rugrats-style party: purple screen, orange Nick splat, wobbly logo letters, raining baby gear ----
+#define RG_PURPLE  0x3A0C   // #3B1F5E
+#define RG_ORANGE  0xF3E1   // #F57D0D
+#define RG_GREEN   0x7E08   // #7AC143
+#define RG_PINK    0xFB19   // #FF66CC
+#define RG_YELLOW  0xFEA0   // #FFD600
+#define RG_BLUE    0x3D7F   // #3AAEFF
+#define RG_WHITE   0xFFFF
+
+static void drawBabyItem(TFT_eSPI& g, int x, int y, uint8_t kind) {
+  switch (kind % 3) {
+    case 0:   // bottle
+      g.fillRoundRect(x, y + 5, 9, 16, 2, RG_WHITE);
+      g.fillRect(x + 2, y + 1, 5, 5, RG_ORANGE);
+      g.drawFastHLine(x + 2, y + 10, 4, RG_BLUE);
+      g.drawFastHLine(x + 2, y + 14, 4, RG_BLUE);
+      break;
+    case 1:   // rattle
+      g.fillRect(x + 4, y + 8, 2, 12, RG_YELLOW);
+      g.fillCircle(x + 5, y + 6, 6, RG_PINK);
+      g.fillCircle(x + 5, y + 20, 2, RG_YELLOW);
+      g.fillCircle(x + 3, y + 4, 1, RG_WHITE);
+      break;
+    default:  // pacifier
+      g.drawCircle(x + 5, y + 8, 5, RG_BLUE);
+      g.drawCircle(x + 5, y + 8, 4, RG_BLUE);
+      g.fillCircle(x + 5, y + 8, 2, RG_GREEN);
+      g.fillRoundRect(x + 2, y + 13, 7, 4, 2, RG_BLUE);
+      break;
+  }
+}
+
+// Chunky title lettering: each letter bumped up or down and cycling through colours.
+static void drawWobblyText(TFT_eSPI& g, const char* text, int cx, int y, const GFXfont* font, uint32_t seed) {
+  static const uint16_t cols[] = {RG_GREEN, RG_PINK, RG_YELLOW, RG_BLUE, RG_WHITE};
+  g.setFreeFont(font);
+  g.setTextDatum(ML_DATUM);
+  int total = g.textWidth(text);
+  int x = cx - total / 2;
+  char one[2] = {0, 0};
+  for (int i = 0; text[i]; i++) {
+    one[0] = text[i];
+    int dy = (int)((seed >> (i * 2)) % 7) - 3;
+    g.setTextColor(cols[(i + (seed & 3)) % 5]);
+    g.drawString(one, x, y + dy);
+    x += g.textWidth(one) + 2;
+  }
+}
+
+static const char* const RG_LINES[] = {
+  "A baby's gotta do what a baby's gotta do",
+  "Hang on to your diapies, babies!",
+  "REPTAR!",
+  "Let's go to the playpen!",
+  "That's a good idea, Tommy!",
+  "You dumb babies!",
+  "New baby in the playpen!",
+  "Chuckie, we gotta celebrate!",
+};
+
+static void rugratsParty(const Platform& p) {
+  Serial.printf("[party] %s +%ld\n", p.name, p.delta);
+  const int N = 18;
+  struct Item { int16_t x, y; uint8_t vy, kind; } it[N];
+  for (int i = 0; i < N; i++) {
+    it[i] = { (int16_t)random(4, SCR_W - 14), (int16_t)(-random(SCR_H)), (uint8_t)(2 + random(4)), (uint8_t)random(3) };
+  }
+  String plus = "+" + fmtNum(p.delta);
+  const char* line = RG_LINES[random(sizeof RG_LINES / sizeof RG_LINES[0])];
+  uint32_t seed = esp_random();
+
+  // 1) purple screen and a splat that bursts outward
+  tft.fillScreen(RG_PURPLE);
+  const int cx = SCR_W / 2, cy = 108;
+  for (int f = 1; f <= 8; f++) {
+    float k = f / 8.0f;
+    tft.fillCircle(cx, cy, (int)(70 * k), RG_ORANGE);
+    for (int b = 0; b < 9; b++) {
+      float a = b * 40.0f * DEG_TO_RAD;
+      int rr = 60 + (b * 13) % 30;
+      tft.fillCircle(cx + (int)(cosf(a) * rr * k), cy + (int)(sinf(a) * rr * 0.7f * k), (int)((12 + (b * 7) % 10) * k), RG_ORANGE);
+    }
+    if (f == 8) {   // a few drips
+      for (int d = 0; d < 4; d++) {
+        int dx = cx - 60 + d * 38;
+        tft.fillRect(dx - 3, cy + 40, 6, 14 + d * 4, RG_ORANGE);
+        tft.fillCircle(dx, cy + 54 + d * 4, 4, RG_ORANGE);
+      }
+    }
+    setLed(f % 3 == 0, f % 3 == 1, f % 3 == 2);
+    delay(35);
+  }
+  // 2) the words
+  drawWobblyText(tft, "NEW BABY!", cx, cy - 26, FONT_B18, seed);
+  drawWobblyText(tft, plus.c_str(), cx, cy + 20, FONT_B24, seed >> 5);
+  tft.setTextFont(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(RG_WHITE, RG_PURPLE);
+  tft.drawString(String("on ") + p.name, cx, 24);
+  String l = line;
+  while (tft.textWidth(l) > SCR_W - 10 && l.length() > 4) l.remove(l.length() - 1);
+  tft.drawString(l, cx, SCR_H - 14);
+
+  // 3) baby gear raining down the sides (the middle is left to the splat)
+  unsigned long endAt = millis() + (unsigned long)FOLLOWER_PARTY_SECONDS * 1000UL;
+  uint8_t tick = 0;
+  while (millis() < endAt) {
+    tick++;
+    setLed((tick / 4) % 3 == 0, (tick / 4) % 3 == 1, (tick / 4) % 3 == 2);
+    for (int i = 0; i < N; i++) {
+      bool side = it[i].x < cx - 112 || it[i].x > cx + 100;
+      bool clearBand = it[i].y + 22 < 36 || it[i].y > SCR_H - 26 ? false : true;
+      if (side && it[i].y > 34 && it[i].y + 22 < SCR_H - 24) tft.fillRect(it[i].x, it[i].y, 12, 22, RG_PURPLE);
+      it[i].y += it[i].vy;
+      if (it[i].y > SCR_H) { it[i].y = -24; it[i].x = random(4, SCR_W - 14); it[i].kind = random(3); }
+      side = it[i].x < cx - 112 || it[i].x > cx + 100;
+      if (side && it[i].y > 34 && it[i].y + 22 < SCR_H - 24 && clearBand) drawBabyItem(tft, it[i].x, it[i].y, it[i].kind);
+    }
+    if (touch.tirqTouched() && touch.touched()) break;
+    delay(40);
+  }
+  setLed(false, false, false);
+  clearScreen();
+  drawAll();
+}
+
 // A one-second burst of coins and bills out of a card plus a big "+N". Plays for every gain, even +1.
 static void miniCelebrate(int x, const Platform& p) {
 #if ANIMATE_COUNT_UP
@@ -1386,8 +1518,13 @@ static void fetchAll() {
   long total = currentTotal();
   setLed(false, false, false);
   animateCountUp();
+#if FOLLOWER_PARTY
+  if (ig.source != SOURCE_OFF && ig.ok && ig.prev >= 0 && ig.count > ig.prev) rugratsParty(ig);
+  if (tt.source != SOURCE_OFF && tt.ok && tt.prev >= 0 && tt.count > tt.prev) rugratsParty(tt);
+#else
   if (ig.source != SOURCE_OFF && ig.ok && ig.prev >= 0 && ig.count > ig.prev) miniCelebrate(CARD_X1, ig);
   if (tt.source != SOURCE_OFF && tt.ok && tt.prev >= 0 && tt.count > tt.prev) miniCelebrate(CARD_X2, tt);
+#endif
   drawAll();
   if (lastTotal >= 0 && total > lastTotal) {
     for (int i = 0; i < 3; i++) { setLed(false, true, false); delay(120); setLed(false, false, false); delay(120); }
