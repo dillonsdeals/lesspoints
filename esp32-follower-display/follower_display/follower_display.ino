@@ -97,6 +97,22 @@
 #ifndef WIFI_PASSWORD
 #define WIFI_PASSWORD ""
 #endif
+#ifndef THEME
+#define THEME 1                     // 1 = sage green, 0 = classic dark
+#endif
+// Raw touch range -> pixels. Adjust in config.h if taps land in the wrong place.
+#ifndef TOUCH_MIN_X
+#define TOUCH_MIN_X 200
+#endif
+#ifndef TOUCH_MAX_X
+#define TOUCH_MAX_X 3700
+#endif
+#ifndef TOUCH_MIN_Y
+#define TOUCH_MIN_Y 240
+#endif
+#ifndef TOUCH_MAX_Y
+#define TOUCH_MAX_Y 3800
+#endif
 #ifndef ANIMATE_COUNT_UP
 #define ANIMATE_COUNT_UP 1          // numbers roll up when followers increase
 #endif
@@ -137,18 +153,47 @@
 #define FOOT_H     26
 
 // ---------- colours (RGB565) ----------
-#define C_BG        0x10A3   // near black with a hint of blue
-#define C_CARD      0x2124   // dark grey card
-#define C_TOTAL     0x1926
-#define C_TEXT      TFT_WHITE
-#define C_MUTED     0x8C71
-#define C_IG        0xE1AD   // Instagram pink
-#define C_IG2       0xFC40   // Instagram orange
-#define C_TT        0x6E5A   // TikTok cyan
-#define C_TT2       0xE8EA   // TikTok red
-#define C_GOOD      0x2E8E   // green
-#define C_BAD       0xE945   // red
-#define C_WARN      0xFD20   // amber
+#if THEME == 1
+// Sage green: deep forest background, moss cards, a sage panel for the total.
+#define C_BG          0x1924   // #1B2520 deep forest
+#define C_CARD        0x29C6   // #2A3A30 moss card
+#define C_TOTAL       0x9D71   // #9CAF88 sage panel
+#define C_TOTAL_TEXT  0x1924   // dark text on the sage panel
+#define C_TOTAL_MUTED 0x3A67
+#define C_TOTAL_GOOD  0x2AC5   // deep green
+#define C_TOTAL_BAD   0x89C5   // brick
+#define C_TEXT        0xF79C   // #F3F1E7 cream
+#define C_MUTED       0xA5B3   // #A3B59B sage grey
+#define C_ACCENT      0x9D71   // sage
+#define C_ACCENT_L    0xCEB7   // #C8D6BC pale sage
+#define C_IG          0xDD35   // #D9A5AC dusty rose
+#define C_IG2         0xEE14   // #EAC3A3 peach
+#define C_TT          0x8E58   // #8FCBC2 soft teal
+#define C_TT2         0xE534   // #E3A7A7 blush
+#define C_GOOD        0xAEF3   // #A9DD9A light green
+#define C_BAD         0xE4D1   // #E09A8A soft red
+#define C_WARN        0xE651   // #E6C98A sand
+#else
+// Classic dark
+#define C_BG          0x10A3
+#define C_CARD        0x2124
+#define C_TOTAL       0x1926
+#define C_TOTAL_TEXT  TFT_WHITE
+#define C_TOTAL_MUTED 0x8C71
+#define C_TOTAL_GOOD  0x2E8E
+#define C_TOTAL_BAD   0xE945
+#define C_TEXT        TFT_WHITE
+#define C_MUTED       0x8C71
+#define C_ACCENT      0x7BFF
+#define C_ACCENT_L    TFT_YELLOW
+#define C_IG          0xE1AD
+#define C_IG2         0xFC40
+#define C_TT          0x6E5A
+#define C_TT2         0xE8EA
+#define C_GOOD        0x2E8E
+#define C_BAD         0xE945
+#define C_WARN        0xFD20
+#endif
 
 // ---------- globals ----------
 TFT_eSPI tft;
@@ -211,6 +256,10 @@ static bool   everFetched  = false;
 static long   lastTotal    = -1;
 static String footerMsg;
 static bool   footerIsError = false;
+
+// What the screen is showing: the dashboard, or one panel blown up full screen.
+enum View { VIEW_DASH, VIEW_IG, VIEW_TT, VIEW_TOTAL };
+static View view = VIEW_DASH;
 
 // =====================================================================
 //  small helpers
@@ -551,7 +600,8 @@ struct Canvas {
   TFT_eSPI* g;
   int ox, oy;
   bool sprite;
-  Canvas(int x, int y, int w, int h) {
+  Canvas(int x, int y, int w, int h, uint8_t depth = 16) {
+    spr.setColorDepth(depth);                 // 8-bit halves the memory for big areas
     sprite = spr.createSprite(w, h) != nullptr;
     g = sprite ? static_cast<TFT_eSPI*>(&spr) : &tft;
     ox = sprite ? 0 : x; oy = sprite ? 0 : y;
@@ -559,6 +609,7 @@ struct Canvas {
   }
   void done() {
     if (sprite) { spr.pushSprite(px, py); spr.deleteSprite(); }
+    spr.setColorDepth(16);
   }
   int px = 0, py = 0;
 };
@@ -567,10 +618,13 @@ static void drawHeader() {
   Canvas c(0, 0, SCR_W, HDR_H);
   TFT_eSPI& g = *c.g;
   g.fillRect(c.ox, c.oy, SCR_W, HDR_H, C_BG);
-  g.setTextColor(C_TEXT, C_BG);
+  const char* title = view == VIEW_IG ? "INSTAGRAM" : view == VIEW_TT ? "TIKTOK" :
+                      view == VIEW_TOTAL ? "TOTAL FOLLOWERS" : "LIVE FOLLOWERS";
+  uint16_t tcol = view == VIEW_IG ? C_IG : view == VIEW_TT ? C_TT : C_ACCENT_L;
+  g.setTextColor(tcol, C_BG);
   g.setTextDatum(ML_DATUM);
   g.setFreeFont(&FreeSansBold9pt7b);
-  g.drawString("LIVE FOLLOWERS", c.ox + 6, c.oy + HDR_H / 2);
+  g.drawString(title, c.ox + 6, c.oy + HDR_H / 2);
   g.setTextFont(2);
   g.setTextDatum(MR_DATUM);
   g.setTextColor(C_MUTED, C_BG);
@@ -596,8 +650,9 @@ static void drawFooter() {
       unsigned long ago = (millis() - lastFetchMs) / 1000;
       long left = (long)(nextFetchMs - millis()) / 1000; if (left < 0) left = 0;
       msg = "Updated " + String(ago < 60 ? String(ago) + "s" : String(ago / 60) + "m") + " ago";
-      msg += "  |  next in " + String(left / 60) + ":" + (left % 60 < 10 ? "0" : "") + String(left % 60);
-      msg += "  |  tap = refresh";
+      msg += "  |  next " + String(left / 60) + ":" + (left % 60 < 10 ? "0" : "") + String(left % 60);
+      if (view != VIEW_DASH) msg += "  |  tap to go back";
+      else msg += ((millis() / 6000) % 2) ? "  |  tap a panel to zoom" : "  |  tap here to refresh";
     }
   }
   while (g.textWidth(msg) > SCR_W - 8 && msg.length() > 4) msg = msg.substring(0, msg.length() - 4) + "...";
@@ -674,29 +729,105 @@ static void drawTotal(long showTotal = -2, bool hideDelta = false) {
   g.fillRoundRect(ox + CARD_X1, oy, SCR_W - 2 * CARD_X1, TOTAL_H, 10, C_TOTAL);
   g.setTextFont(2);
   g.setTextDatum(TL_DATUM);
-  g.setTextColor(C_MUTED, C_TOTAL);
+  g.setTextColor(C_TOTAL_MUTED, C_TOTAL);
   g.drawString("TOTAL", ox + CARD_X1 + 10, oy + 6);
   long total = (showTotal == -2) ? currentTotal() : showTotal;
   long delta = (ig.source != SOURCE_OFF ? ig.delta : 0) + (tt.source != SOURCE_OFF ? tt.delta : 0);
   if (delta != 0 && !hideDelta) {
     g.setTextDatum(TR_DATUM);
-    g.setTextColor(delta > 0 ? C_GOOD : C_BAD, C_TOTAL);
+    g.setTextColor(delta > 0 ? C_TOTAL_GOOD : C_TOTAL_BAD, C_TOTAL);
     g.drawString((delta > 0 ? "+" : "-") + fmtNum(labs(delta)), ox + SCR_W - CARD_X1 - 10, oy + 6);
   }
   String num = fmtNum(total);
   fitFont(g, num, SCR_W - 2 * CARD_X1 - 20);
   g.setTextDatum(MC_DATUM);
-  g.setTextColor(C_TEXT, C_TOTAL);
+  g.setTextColor(C_TOTAL_TEXT, C_TOTAL);
   g.drawString(num, ox + SCR_W / 2, oy + TOTAL_H / 2 + 6);
+  c.done();
+}
+
+// Biggest number we can draw: the 75px built-in font for plain digits, then smaller ones.
+static void drawBigNumber(TFT_eSPI& g, long value, int cx, int cy, int maxW) {
+  g.setTextDatum(MC_DATUM);
+  if (value >= 0) {
+    String plain = String(value);
+#ifdef LOAD_FONT8
+    g.setTextFont(8);
+    if (g.textWidth(plain) <= maxW) { g.drawString(plain, cx, cy); return; }
+#endif
+#ifdef LOAD_FONT6
+    g.setTextFont(6);
+    if (g.textWidth(plain) <= maxW) { g.drawString(plain, cx, cy); return; }
+#endif
+  }
+  String num = fmtNum(value);
+  fitFont(g, num, maxW);
+  g.drawString(num, cx, cy);
+}
+
+// One panel blown up to fill the screen (between the header and the footer).
+static void drawFullscreen(long showValue = -2, bool hideDelta = false) {
+  const Platform* p = view == VIEW_IG ? &ig : view == VIEW_TT ? &tt : nullptr;
+  const int W = SCR_W, H = FOOT_Y - HDR_H;
+  Canvas c(0, HDR_H, W, H, 8);
+  TFT_eSPI& g = *c.g;
+  int ox = c.ox, oy = c.oy;
+  uint16_t accent = p ? p->accent : C_ACCENT, accent2 = p ? p->accent2 : C_ACCENT_L;
+  g.fillRect(ox, oy, W, H, C_BG);
+  g.fillRoundRect(ox + CARD_X1, oy + 2, W - 2 * CARD_X1, H - 4, 12, C_CARD);
+  g.fillRoundRect(ox + CARD_X1, oy + 2, W - 2 * CARD_X1, 8, 4, accent);
+  g.fillRect(ox + CARD_X1, oy + 6, W - 2 * CARD_X1, 4, C_CARD);
+  g.fillRect(ox + W / 2, oy + 2, W / 2 - CARD_X1, 4, accent2);
+
+  g.setTextFont(2);
+  g.setTextDatum(TC_DATUM);
+  g.setTextColor(C_MUTED, C_CARD);
+  String sub = p ? String("@") + p->user
+                 : String("Instagram ") + fmtNum(ig.count) + "   +   TikTok " + fmtNum(tt.count);
+  g.drawString(sub, ox + W / 2, oy + 18);
+
+  long value = (showValue != -2) ? showValue : (p ? p->count : currentTotal());
+  g.setTextColor(C_TEXT, C_CARD);
+  drawBigNumber(g, value, ox + W / 2, oy + H / 2 - 2, W - 44);
+
+  g.setFreeFont(&FreeSansBold9pt7b);
+  g.setTextDatum(TC_DATUM);
+  g.setTextColor(accent, C_CARD);
+  g.drawString("FOLLOWERS", ox + W / 2, oy + H / 2 + 38);
+
+  g.setTextFont(2);
+  g.setTextDatum(BC_DATUM);
+  long delta = p ? p->delta : (ig.source != SOURCE_OFF ? ig.delta : 0) + (tt.source != SOURCE_OFF ? tt.delta : 0);
+  bool failed = p && !p->ok && p->err.length();
+  if (failed) {
+    g.setTextColor(C_WARN, C_CARD);
+    g.drawString("update failed, showing the last value", ox + W / 2, oy + H - 10);
+  } else if (!hideDelta && delta != 0) {
+    g.setTextColor(delta > 0 ? C_GOOD : C_BAD, C_CARD);
+    g.drawString((delta > 0 ? "+" : "-") + fmtNum(labs(delta)) + " since last check", ox + W / 2, oy + H - 10);
+  } else if (!hideDelta && everFetched) {
+    g.setTextColor(C_MUTED, C_CARD);
+    g.drawString("no change since last check", ox + W / 2, oy + H - 10);
+  }
   c.done();
 }
 
 static void drawAll() {
   drawHeader();
-  drawCard(CARD_X1, ig);
-  drawCard(CARD_X2, tt);
-  drawTotal();
+  if (view == VIEW_DASH) {
+    drawCard(CARD_X1, ig);
+    drawCard(CARD_X2, tt);
+    drawTotal();
+  } else {
+    drawFullscreen();
+  }
   drawFooter();
+}
+
+static void setView(View v) {
+  view = v;
+  tft.fillScreen(C_BG);
+  drawAll();
 }
 
 static void setFooter(const String& msg, bool isError) {
@@ -732,19 +863,33 @@ static void animateCountUp() {
   const int frames = 36;
   for (int f = 1; f <= frames; f++) {
     float t = easeOut((float)f / frames);
-    if (igUp) drawCard(CARD_X1, ig, ig.prev + (long)((ig.count - ig.prev) * t + 0.5f), f < frames);
-    if (ttUp) drawCard(CARD_X2, tt, tt.prev + (long)((tt.count - tt.prev) * t + 0.5f), f < frames);
-    drawTotal(totalFrom + (long)((totalTo - totalFrom) * t + 0.5f), f < frames);
+    long igV = ig.prev + (long)((ig.count - ig.prev) * t + 0.5f);
+    long ttV = tt.prev + (long)((tt.count - tt.prev) * t + 0.5f);
+    long toV = totalFrom + (long)((totalTo - totalFrom) * t + 0.5f);
+    switch (view) {
+      case VIEW_DASH:
+        if (igUp) drawCard(CARD_X1, ig, igV, f < frames);
+        if (ttUp) drawCard(CARD_X2, tt, ttV, f < frames);
+        drawTotal(toV, f < frames);
+        break;
+      case VIEW_IG:    if (igUp) drawFullscreen(igV, f < frames); break;
+      case VIEW_TT:    if (ttUp) drawFullscreen(ttV, f < frames); break;
+      case VIEW_TOTAL: drawFullscreen(toV, f < frames); break;
+    }
     delay(25);
   }
 #endif
 }
 
-static const uint16_t CONFETTI[] = {C_IG, C_IG2, C_TT, C_TT2, C_GOOD, TFT_YELLOW, TFT_WHITE, 0x7BFF, TFT_ORANGE};
+static const uint16_t CONFETTI[] = {C_IG, C_IG2, C_TT, C_TT2, C_GOOD, C_ACCENT_L, TFT_WHITE, C_ACCENT, C_WARN};
 
 // A one-second burst of confetti out of a card plus a big "+N". Plays for every gain, even +1.
 static void miniCelebrate(int x, const Platform& p) {
 #if ANIMATE_COUNT_UP
+  if (view != VIEW_DASH) {            // zoomed in: just pulse the LED
+    for (int i = 0; i < 4; i++) { setLed(false, true, false); delay(100); setLed(false, false, false); delay(100); }
+    return;
+  }
   struct Spark { float x, y, vx, vy; uint8_t size; uint16_t color; };
   const int N = 28;
   Spark sp[N];
@@ -798,13 +943,13 @@ static long milestoneCrossed(long from, long to) {
 static void drawCelebrationText(TFT_eSPI& g, const String& who, const String& num) {
   g.setTextDatum(MC_DATUM);
   g.setFreeFont(&FreeSansBold9pt7b);
-  g.setTextColor(TFT_YELLOW);                     // no background colour: text floats over the confetti
+  g.setTextColor(C_ACCENT_L);                     // no background colour: text floats over the confetti
   g.drawString("NEW MILESTONE", SCR_W / 2, 72);
   fitFont(g, num, SCR_W - 20);
   g.setTextColor(TFT_WHITE);
   g.drawString(num, SCR_W / 2, 118);
   g.setFreeFont(&FreeSansBold12pt7b);
-  g.setTextColor(C_IG);
+  g.setTextColor(C_ACCENT);
   g.drawString(who + " followers", SCR_W / 2, 162);
 }
 
@@ -1038,15 +1183,31 @@ void setup() {
   drawAll();
 }
 
+// Dashboard: tap a card or the total to zoom it, tap the header/footer to refresh.
+// Zoomed in: tap anywhere to go back.
+static void handleTap(int x, int y) {
+  Serial.printf("[touch] %d,%d\n", x, y);
+  if (view != VIEW_DASH) { setView(VIEW_DASH); return; }
+  if (y >= CARD_Y && y < CARD_Y + CARD_H) {
+    if (x < SCR_W / 2) { if (ig.source != SOURCE_OFF) setView(VIEW_IG); }
+    else               { if (tt.source != SOURCE_OFF) setView(VIEW_TT); }
+    return;
+  }
+  if (y >= TOTAL_Y && y < TOTAL_Y + TOTAL_H) { setView(VIEW_TOTAL); return; }
+  forceRefresh = true;
+  Serial.println("[touch] manual refresh");
+}
+
 void loop() {
   ensureWifi();
 
-  // touch = refresh now
   if (touch.tirqTouched() && touch.touched()) {
-    if (millis() - lastTouchMs > 1000) {
+    if (millis() - lastTouchMs > 600) {
       lastTouchMs = millis();
-      forceRefresh = true;
-      Serial.println("[touch] manual refresh");
+      TS_Point pt = touch.getPoint();
+      int x = constrain(map(pt.x, TOUCH_MIN_X, TOUCH_MAX_X, 0, SCR_W - 1), 0, SCR_W - 1);
+      int y = constrain(map(pt.y, TOUCH_MIN_Y, TOUCH_MAX_Y, 0, SCR_H - 1), 0, SCR_H - 1);
+      handleTap(x, y);
     }
   }
 

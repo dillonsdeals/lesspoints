@@ -30,6 +30,14 @@
 //   London    "GMT0BST,M3.5.0/1,M10.5.0"  Berlin   "CET-1CEST,M3.5.0,M10.5.0/3"
 #define TZ_INFO "EST5EDT,M3.2.0,M11.1.0"
 
+// ---------------- Look ----------------
+#define THEME 1                   // 1 = sage green, 0 = classic dark
+// Touch calibration: only change if taps land in the wrong place (raw 0..4095 -> pixels)
+// #define TOUCH_MIN_X 200
+// #define TOUCH_MAX_X 3700
+// #define TOUCH_MIN_Y 240
+// #define TOUCH_MAX_Y 3800
+
 // ---------------- Fun ----------------
 #define ANIMATE_COUNT_UP      1   // numbers roll up when you gain followers
 #define CELEBRATE_MILESTONES  1   // confetti when a count crosses a round number (100s, 500s, 1,000s...)
