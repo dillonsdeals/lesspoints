@@ -184,8 +184,8 @@
 #define CARD_GAP    8
 #define CARD_X1     4
 #define CARD_X2   (CARD_X1 + CARD_W + CARD_GAP)
-#define TOTAL_Y   144
-#define TOTAL_H    64
+#define TOTAL_Y   142
+#define TOTAL_H    68
 #define FOOT_Y    214
 #define FOOT_H     26
 
@@ -777,6 +777,16 @@ static const GFXfont* fitFont(TFT_eSPI& g, const String& text, int maxW) {
   return fonts[3];
 }
 
+// Like fitFont but never bigger than 18pt: for boxes too short for the 24pt numerals.
+static const GFXfont* fitFontMedium(TFT_eSPI& g, const String& text, int maxW) {
+  static const GFXfont* fonts[] = {FONT_B18, FONT_B12, FONT_B9};
+  for (const GFXfont* f : fonts) {
+    g.setFreeFont(f);
+    if (g.textWidth(text) <= maxW) return f;
+  }
+  return fonts[2];
+}
+
 // Same as fitFont, but the font must fit both texts (so the two cards match).
 static const GFXfont* fitFont2(TFT_eSPI& g, const String& a, const String& b, int maxW) {
   static const GFXfont* fonts[] = {FONT_B24, FONT_B18, FONT_B12, FONT_B9};
@@ -971,10 +981,10 @@ static void drawTotal(long showTotal, bool hideDelta) {
   if (!hideDelta) drawTicker(g, ox + SCR_W - CARD_X1 - 12, cy, delta, C_TOTAL_GOOD, C_TOTAL_BAD, C_TOTAL, 'R');
 
   String num = fmtNum(total);
-  fitFont(g, num, SCR_W - 2 * CARD_X1 - 24);
+  fitFontMedium(g, num, SCR_W - 2 * CARD_X1 - 24);
   g.setTextDatum(MC_DATUM);
   g.setTextColor(C_TOTAL_TEXT, C_TOTAL);
-  g.drawString(num, ox + SCR_W / 2, oy + TOTAL_H / 2 + 9);
+  g.drawString(num, ox + SCR_W / 2, oy + TOTAL_H / 2 + 10);
   c.done();
 }
 
