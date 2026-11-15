@@ -153,10 +153,10 @@
 #define ANIMATE_COUNT_UP 1          // numbers roll up when followers increase
 #endif
 #ifndef FOLLOWER_PARTY
-#define FOLLOWER_PARTY 1            // 1 = Rugrats-style full-screen party for every new follower, 0 = small coin burst
+#define FOLLOWER_PARTY 1            // 1 = fireworks over the NYC skyline for every new follower, 0 = small coin burst
 #endif
 #ifndef FOLLOWER_PARTY_SECONDS
-#define FOLLOWER_PARTY_SECONDS 3
+#define FOLLOWER_PARTY_SECONDS 4
 #endif
 #ifndef CELEBRATE_MILESTONES
 #define CELEBRATE_MILESTONES 1      // confetti when a count crosses a round number
@@ -1199,126 +1199,136 @@ static void drawMoney(TFT_eSPI& g, const Money& m) {
   }
 }
 
-// ---- Rugrats-style party: purple screen, orange Nick splat, wobbly logo letters, raining baby gear ----
-#define RG_PURPLE  0x3A0C   // #3B1F5E
-#define RG_ORANGE  0xF3E1   // #F57D0D
-#define RG_GREEN   0x7E08   // #7AC143
-#define RG_PINK    0xFB19   // #FF66CC
-#define RG_YELLOW  0xFEA0   // #FFD600
-#define RG_BLUE    0x3D7F   // #3AAEFF
-#define RG_WHITE   0xFFFF
+// ---- NYC glamour: fireworks over the skyline for every new follower ----
+#define NY_SKY      0x0000
+#define NY_BLDG     0x0841   // near-black buildings
+#define NY_WINDOW   0xE5A6   // warm lit windows
+#define NY_SKYLINE_Y 150     // top of the tallest rooftops band
 
-static void drawBabyItem(TFT_eSPI& g, int x, int y, uint8_t kind) {
-  switch (kind % 3) {
-    case 0:   // bottle
-      g.fillRoundRect(x, y + 5, 9, 16, 2, RG_WHITE);
-      g.fillRect(x + 2, y + 1, 5, 5, RG_ORANGE);
-      g.drawFastHLine(x + 2, y + 10, 4, RG_BLUE);
-      g.drawFastHLine(x + 2, y + 14, 4, RG_BLUE);
-      break;
-    case 1:   // rattle
-      g.fillRect(x + 4, y + 8, 2, 12, RG_YELLOW);
-      g.fillCircle(x + 5, y + 6, 6, RG_PINK);
-      g.fillCircle(x + 5, y + 20, 2, RG_YELLOW);
-      g.fillCircle(x + 3, y + 4, 1, RG_WHITE);
-      break;
-    default:  // pacifier
-      g.drawCircle(x + 5, y + 8, 5, RG_BLUE);
-      g.drawCircle(x + 5, y + 8, 4, RG_BLUE);
-      g.fillCircle(x + 5, y + 8, 2, RG_GREEN);
-      g.fillRoundRect(x + 2, y + 13, 7, 4, 2, RG_BLUE);
-      break;
+static const uint16_t NY_COLORS[] = {C_GOLD_L, TFT_WHITE, 0xFF56 /* champagne */, 0xEDB7 /* rose gold */, 0xC618 /* silver */, C_GOLD};
+
+static void drawSkyline() {
+  // buildings
+  struct B { uint8_t x, w, h; } bl[] = {
+    {0,18,34},{20,14,50},{36,22,28},{60,16,62},{78,12,40},{92,24,46},{118,14,58},{134,20,36},
+    {156,16,70},{174,22,44},{198,14,52},{214,26,30},{242,16,64},{260,20,42},{282,14,56},{298,22,38}
+  };
+  for (auto& bd : bl) {
+    int top = FOOT_Y - bd.h;
+    tft.fillRect(bd.x, top, bd.w, bd.h, NY_BLDG);
+    for (int y = top + 4; y < FOOT_Y - 4; y += 6)
+      for (int x = bd.x + 3; x < bd.x + bd.w - 2; x += 5)
+        if (random(3)) tft.fillRect(x, y, 2, 2, NY_WINDOW);
   }
+  // Empire State and One WTC spires
+  tft.fillRect(156 + 5, FOOT_Y - 70 - 14, 6, 14, NY_BLDG);
+  tft.drawFastVLine(156 + 8, FOOT_Y - 70 - 30, 16, NY_BLDG);
+  tft.fillCircle(156 + 8, FOOT_Y - 70 - 30, 1, C_GOLD_L);
+  tft.fillTriangle(242, FOOT_Y - 64, 258, FOOT_Y - 64, 250, FOOT_Y - 82, NY_BLDG);
+  tft.drawFastVLine(250, FOOT_Y - 110, 28, NY_BLDG);
+  tft.fillCircle(250, FOOT_Y - 110, 1, TFT_WHITE);
 }
 
-// Chunky title lettering: each letter bumped up or down and cycling through colours.
-static void drawWobblyText(TFT_eSPI& g, const char* text, int cx, int y, const GFXfont* font, uint32_t seed) {
-  static const uint16_t cols[] = {RG_GREEN, RG_PINK, RG_YELLOW, RG_BLUE, RG_WHITE};
-  g.setFreeFont(font);
-  g.setTextDatum(ML_DATUM);
-  int total = g.textWidth(text);
-  int x = cx - total / 2;
-  char one[2] = {0, 0};
-  for (int i = 0; text[i]; i++) {
-    one[0] = text[i];
-    int dy = (int)((seed >> (i * 2)) % 7) - 3;
-    g.setTextColor(cols[(i + (seed & 3)) % 5]);
-    g.drawString(one, x, y + dy);
-    x += g.textWidth(one) + 2;
-  }
-}
-
-static const char* const RG_LINES[] = {
-  "A follower's gotta do what a follower's gotta do",
-  "Hang on to your diapies, we got a new one!",
-  "REPTAR-sized news: someone followed!",
-  "Another one joined the playpen!",
-  "That's a good idea, following Dillon!",
-  "Somebody hit follow!",
-  "Welcome to the crew, new follower!",
-  "The playpen just got bigger!",
+struct Rocket {
+  int16_t x, y, tx, ty;   // position, burst point
+  int8_t  phase;          // 0 idle, 1 rising, 2 burst
+  uint8_t life, n;
+  uint16_t color;
+  float sx[22], sy[22], svx[22], svy[22];
 };
 
-static void rugratsParty(const Platform& p) {
-  Serial.printf("[party] %s +%ld\n", p.name, p.delta);
-  const int N = 18;
-  struct Item { int16_t x, y; uint8_t vy, kind; } it[N];
-  for (int i = 0; i < N; i++) {
-    it[i] = { (int16_t)random(4, SCR_W - 14), (int16_t)(-random(SCR_H)), (uint8_t)(2 + random(4)), (uint8_t)random(3) };
-  }
-  String plus = "+" + fmtNum(p.delta);
-  const char* line = RG_LINES[random(sizeof RG_LINES / sizeof RG_LINES[0])];
-  uint32_t seed = esp_random();
+static void drawPartyText(const Platform& p, const String& plus, const char* line, bool shimmer) {
+  tft.setTextDatum(MC_DATUM);
+  tft.setFreeFont(FONT_B12);
+  tft.setTextColor(shimmer ? TFT_WHITE : C_GOLD_L);
+  tft.drawString(p.delta == 1 ? "NEW FOLLOWER" : "NEW FOLLOWERS", SCR_W / 2, 30);
+  tft.setFreeFont(FONT_B24);
+  tft.setTextColor(TFT_WHITE);
+  tft.drawString(plus, SCR_W / 2, 70);
+  tft.setTextFont(2);
+  tft.setTextColor(C_GOLD_L);
+  tft.drawString(String("on ") + p.name, SCR_W / 2, 100);
+  tft.setTextColor(C_TEXT, NY_SKY);
+  tft.drawString(line, SCR_W / 2, SCR_H - 13);
+}
 
-  // 1) purple screen and a splat that bursts outward
-  tft.fillScreen(RG_PURPLE);
-  const int cx = SCR_W / 2, cy = 108;
-  for (int f = 1; f <= 8; f++) {
-    float k = f / 8.0f;
-    tft.fillCircle(cx, cy, (int)(70 * k), RG_ORANGE);
-    for (int b = 0; b < 9; b++) {
-      float a = b * 40.0f * DEG_TO_RAD;
-      int rr = 60 + (b * 13) % 30;
-      tft.fillCircle(cx + (int)(cosf(a) * rr * k), cy + (int)(sinf(a) * rr * 0.7f * k), (int)((12 + (b * 7) % 10) * k), RG_ORANGE);
+static const char* const NY_LINES[] = {
+  "Lights, camera, follower.",
+  "One more fan in the city that never sleeps.",
+  "Champagne's on us tonight.",
+  "Front row, velvet rope, you're in.",
+  "Big city, bigger following.",
+  "Skyline's glowing for you.",
+  "That's the glow-up, baby.",
+  "Make some noise, Manhattan.",
+};
+
+static void glamParty(const Platform& p) {
+  Serial.printf("[party] %s +%ld\n", p.name, p.delta);
+  String plus = "+" + fmtNum(p.delta);
+  String line = NY_LINES[random(sizeof NY_LINES / sizeof NY_LINES[0])];
+  tft.setTextFont(2);
+  while (tft.textWidth(line) > SCR_W - 8 && line.length() > 4) line.remove(line.length() - 1);
+
+  tft.fillScreen(NY_SKY);
+  for (int i = 0; i < 40; i++) tft.drawPixel(random(SCR_W), random(NY_SKYLINE_Y - 30), 0x8410);   // faint stars
+  drawSkyline();
+  drawPartyText(p, plus, line.c_str(), false);
+
+  const int R = 4;
+  static Rocket rk[R];
+  for (auto& r : rk) r.phase = 0;
+  unsigned long endAt = millis() + (unsigned long)FOLLOWER_PARTY_SECONDS * 1000UL;
+  unsigned long nextLaunch = 0;
+  uint16_t frame = 0;
+  while (millis() < endAt) {
+    frame++;
+    // launch a new rocket now and then
+    if (millis() >= nextLaunch) {
+      for (auto& r : rk) {
+        if (r.phase) continue;
+        r.x = random(30, SCR_W - 30); r.y = NY_SKYLINE_Y + 10;
+        r.tx = r.x + random(-20, 21); r.ty = random(20, 115);
+        r.phase = 1; r.color = NY_COLORS[random(6)];
+        break;
+      }
+      nextLaunch = millis() + random(250, 650);
     }
-    if (f == 8) {   // a few drips
-      for (int d = 0; d < 4; d++) {
-        int dx = cx - 60 + d * 38;
-        tft.fillRect(dx - 3, cy + 40, 6, 14 + d * 4, RG_ORANGE);
-        tft.fillCircle(dx, cy + 54 + d * 4, 4, RG_ORANGE);
+    bool anyBurst = false;
+    for (auto& r : rk) {
+      if (r.phase == 1) {                                   // rising trail
+        tft.fillRect(r.x - 1, r.y - 1, 3, 3, NY_SKY);
+        r.y -= 9; r.x += (r.tx - r.x) / 6;
+        if (r.y <= r.ty) {                                  // burst
+          r.phase = 2; r.life = 24; r.n = 22;
+          for (int i = 0; i < r.n; i++) {
+            float a = i * (6.2832f / r.n) + random(30) / 100.0f, v = 2.2f + random(25) / 10.0f;
+            r.sx[i] = r.x; r.sy[i] = r.y; r.svx[i] = cosf(a) * v; r.svy[i] = sinf(a) * v;
+          }
+          anyBurst = true;
+        } else {
+          tft.fillRect(r.x - 1, r.y - 1, 3, 3, C_GOLD_L);
+        }
+      } else if (r.phase == 2) {                            // expanding sparks
+        for (int i = 0; i < r.n; i++) {
+          if (r.sy[i] < NY_SKYLINE_Y - 2) tft.fillRect((int)r.sx[i] - 1, (int)r.sy[i] - 1, 3, 3, NY_SKY);
+          r.sx[i] += r.svx[i]; r.sy[i] += r.svy[i]; r.svy[i] += 0.12f; r.svx[i] *= 0.96f; r.svy[i] *= 0.96f;
+          uint16_t col = r.life > 14 ? r.color : r.life > 7 ? C_GOLD : 0x4208;
+          if (r.sy[i] < NY_SKYLINE_Y - 2 && r.sx[i] > 1 && r.sx[i] < SCR_W - 2 && r.sy[i] > 1)
+            tft.fillRect((int)r.sx[i] - 1, (int)r.sy[i] - 1, r.life > 7 ? 3 : 2, r.life > 7 ? 3 : 2, col);
+        }
+        if (--r.life == 0) {
+          for (int i = 0; i < r.n; i++)
+            if (r.sy[i] < NY_SKYLINE_Y - 2) tft.fillRect((int)r.sx[i] - 1, (int)r.sy[i] - 1, 3, 3, NY_SKY);
+          r.phase = 0;
+        }
       }
     }
-    setLed(f % 3 == 0, f % 3 == 1, f % 3 == 2);
-    delay(35);
-  }
-  // 2) the words
-  drawWobblyText(tft, p.delta == 1 ? "NEW FOLLOWER!" : "NEW FOLLOWERS!", cx, cy - 26, FONT_B12, seed);
-  drawWobblyText(tft, plus.c_str(), cx, cy + 22, FONT_B24, seed >> 5);
-  tft.setTextFont(2);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(RG_WHITE, RG_PURPLE);
-  tft.drawString(String("on ") + p.name, cx, 24);
-  String l = line;
-  while (tft.textWidth(l) > SCR_W - 10 && l.length() > 4) l.remove(l.length() - 1);
-  tft.drawString(l, cx, SCR_H - 14);
-
-  // 3) baby gear raining down the sides (the middle is left to the splat)
-  unsigned long endAt = millis() + (unsigned long)FOLLOWER_PARTY_SECONDS * 1000UL;
-  uint8_t tick = 0;
-  while (millis() < endAt) {
-    tick++;
-    setLed((tick / 4) % 3 == 0, (tick / 4) % 3 == 1, (tick / 4) % 3 == 2);
-    for (int i = 0; i < N; i++) {
-      bool side = it[i].x < cx - 112 || it[i].x > cx + 100;
-      bool clearBand = it[i].y + 22 < 36 || it[i].y > SCR_H - 26 ? false : true;
-      if (side && it[i].y > 34 && it[i].y + 22 < SCR_H - 24) tft.fillRect(it[i].x, it[i].y, 12, 22, RG_PURPLE);
-      it[i].y += it[i].vy;
-      if (it[i].y > SCR_H) { it[i].y = -24; it[i].x = random(4, SCR_W - 14); it[i].kind = random(3); }
-      side = it[i].x < cx - 112 || it[i].x > cx + 100;
-      if (side && it[i].y > 34 && it[i].y + 22 < SCR_H - 24 && clearBand) drawBabyItem(tft, it[i].x, it[i].y, it[i].kind);
-    }
+    // sparks fly through the words, so repaint them every frame (shimmer on bursts)
+    drawPartyText(p, plus, line.c_str(), anyBurst || (frame % 20) < 3);
+    setLed(anyBurst || (frame % 6) < 2, anyBurst || (frame % 6) < 2, false);   // golden flashes
     if (touch.tirqTouched() && touch.touched()) break;
-    delay(40);
+    delay(28);
   }
   setLed(false, false, false);
   clearScreen();
@@ -1519,8 +1529,8 @@ static void fetchAll() {
   setLed(false, false, false);
   animateCountUp();
 #if FOLLOWER_PARTY
-  if (ig.source != SOURCE_OFF && ig.ok && ig.prev >= 0 && ig.count > ig.prev) rugratsParty(ig);
-  if (tt.source != SOURCE_OFF && tt.ok && tt.prev >= 0 && tt.count > tt.prev) rugratsParty(tt);
+  if (ig.source != SOURCE_OFF && ig.ok && ig.prev >= 0 && ig.count > ig.prev) glamParty(ig);
+  if (tt.source != SOURCE_OFF && tt.ok && tt.prev >= 0 && tt.count > tt.prev) glamParty(tt);
 #else
   if (ig.source != SOURCE_OFF && ig.ok && ig.prev >= 0 && ig.count > ig.prev) miniCelebrate(CARD_X1, ig);
   if (tt.source != SOURCE_OFF && tt.ok && tt.prev >= 0 && tt.count > tt.prev) miniCelebrate(CARD_X2, tt);
