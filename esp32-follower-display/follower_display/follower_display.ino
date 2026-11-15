@@ -482,6 +482,74 @@ static bool parseJson(const String& body, JsonDocument& doc, String& err) {
   return true;
 }
 
+// Reads an HTTP/1.1 response body, decoding chunked transfer encoding on the fly,
+// so ArduinoJson can parse straight from the network without buffering the whole body.
+class HttpBody : public Stream {
+ public:
+  HttpBody(WiFiClient& client, bool chunked, long length) : c(client), chunked(chunked), left(length) {}
+  int available() override { return ended ? 0 : 1; }
+  int peek() override { return -1; }
+  size_t write(uint8_t) override { return 0; }
+  int read() override {
+    if (ended) return -1;
+    if (chunked) { if (left <= 0 && !nextChunk()) return -1; }
+    else if (left == 0) { ended = true; return -1; }
+    int ch = timedRead();
+    if (ch < 0) { ended = true; return -1; }
+    if (left > 0) left--;
+    return ch;
+  }
+  size_t readBytes(char* buf, size_t n) override {
+    size_t i = 0;
+    while (i < n) { int ch = read(); if (ch < 0) break; buf[i++] = (char)ch; }
+    return i;
+  }
+ private:
+  int timedRead() {
+    unsigned long t0 = millis();
+    while (!c.available()) {
+      if (!c.connected() || millis() - t0 > 8000) return -1;
+      delay(1);
+    }
+    return c.read();
+  }
+  bool nextChunk() {
+    if (!first) { timedRead(); timedRead(); }        // CRLF that ends the previous chunk
+    first = false;
+    char line[20]; int n = 0, ch;
+    while ((ch = timedRead()) >= 0 && ch != '\n') { if (n < 19 && ch != '\r') line[n++] = (char)ch; }
+    line[n] = 0;
+    left = strtol(line, nullptr, 16);
+    if (left <= 0) { ended = true; return false; }
+    return true;
+  }
+  WiFiClient& c;
+  bool chunked;
+  long left;
+  bool first = true, ended = false;
+};
+
+// Collects an HTTP body into a fixed buffer (for the aircraft photo).
+class BufWriter : public Stream {
+ public:
+  BufWriter(uint8_t* buf, size_t capacity) : b(buf), cap(capacity) {}
+  size_t write(uint8_t ch) override { if (len < cap) { b[len++] = ch; return 1; } overflow = true; return 0; }
+  size_t write(const uint8_t* d, size_t n) override {
+    size_t k = n < cap - len ? n : cap - len;
+    memcpy(b + len, d, k); len += k;
+    if (k < n) overflow = true;
+    return k;
+  }
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+  size_t len = 0;
+  bool overflow = false;
+ private:
+  uint8_t* b;
+  size_t cap;
+};
+
 // Stream a web page and pull a number out of it without buffering the whole page.
 //   numberBefore=false : number follows `key`   e.g.  "followerCount":1234
 //   numberBefore=true  : number precedes `key`  e.g.  1,234 Followers,
@@ -1361,22 +1429,15 @@ static void lookupRoutes() {
   }
   body += "]}";
   if (!n) return;
-  WiFiClientSecure client; client.setInsecure();
-  HTTPClient http;
-  http.setTimeout(HTTP_TIMEOUT_MS);
-  http.useHTTP10(true);
-  http.setUserAgent("ESP32-FollowerDisplay/1.0");
-  if (!http.begin(client, String(PLANES_API_BASE) + "/api/0/routeset")) return;
-  http.addHeader("Content-Type", "application/json");
-  int code = http.POST(body);
-  if (code != 200) { Serial.printf("[planes] routes HTTP %d\n", code); http.end(); return; }
+  String resp;
+  int code = httpRequest(String(PLANES_API_BASE) + "/api/0/routeset", true, body, "application/json", nullptr, resp);
+  if (code != 200) { Serial.printf("[planes] routes HTTP %d\n", code); return; }
   JsonDocument filter;
   filter[0]["callsign"] = true;
   filter[0]["_airports"][0]["iata"] = true;
   filter[0]["_airports"][0]["location"] = true;
   JsonDocument doc;
-  DeserializationError e = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
-  http.end();
+  DeserializationError e = deserializeJson(doc, resp, DeserializationOption::Filter(filter));
   if (e) { Serial.printf("[planes] routes JSON: %s\n", e.c_str()); return; }
   for (JsonObject r : doc.as<JsonArray>()) {
     const char* cs = r["callsign"] | "";
@@ -1400,14 +1461,18 @@ static void fetchPlanes() {
   WiFiClientSecure client; client.setInsecure();
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
-  http.useHTTP10(true);
   http.setUserAgent("ESP32-FollowerDisplay/1.0");
   String url = String(PLANES_API_BASE) + "/v2/lat/" + String(homeLat, 4) + "/lon/" + String(homeLon, 4) +
                "/dist/" + String(radiusNm);
   Serial.printf("[planes] GET %s (free heap %u)\n", url.c_str(), ESP.getFreeHeap());
   if (!http.begin(client, url)) { planesErr = "begin failed"; setLed(false, false, false); return; }
+  static const char* wanted[] = {"Transfer-Encoding"};
+  http.collectHeaders(wanted, 1);
+  http.addHeader("Accept", "application/json");
   int code = http.GET();
   if (code != 200) { planesErr = "aircraft feed: " + httpErr(code); http.end(); setLed(false, false, false); return; }
+  bool chunked = http.header("Transfer-Encoding").indexOf("chunked") >= 0;
+  HttpBody bodyStream(*http.getStreamPtr(), chunked, http.getSize());
 
   // Only keep the fields we show, so a busy sky fits in memory.
   JsonDocument filter;
@@ -1415,7 +1480,7 @@ static void fetchPlanes() {
   static const char* keys[] = {"hex", "flight", "t", "r", "alt_baro", "gs", "track", "lat", "lon", "dst", "dir", "baro_rate", "ownOp"};
   for (const char* k : keys) filter["ac"][0][k] = true;
   JsonDocument doc;
-  DeserializationError e = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+  DeserializationError e = deserializeJson(doc, bodyStream, DeserializationOption::Filter(filter));
   http.end();
   setLed(false, false, false);
   if (e) {
@@ -1685,28 +1750,22 @@ static void fetchPhoto() {
   if (!http.begin(client, url)) { setLed(false, false, false); return; }
   code = http.GET();
   int len = http.getSize();
-  if (code != 200 || len <= 0 || len > PHOTO_MAX_BYTES) {
+  if (code != 200 || len > PHOTO_MAX_BYTES) {
     Serial.printf("[photo] download %d, %d bytes\n", code, len);
     http.end(); setLed(false, false, false);
     return;
   }
   if (!photoBuf) photoBuf = (uint8_t*)malloc(PHOTO_MAX_BYTES);
   if (!photoBuf) { Serial.println("[photo] no memory"); http.end(); setLed(false, false, false); return; }
-  WiFiClient* st = http.getStreamPtr();
-  size_t got = 0;
-  unsigned long t0 = millis();
-  while (got < (size_t)len && millis() - t0 < 20000) {
-    if (st->available()) got += st->read(photoBuf + got, len - got);
-    else if (!st->connected()) break;
-    else delay(5);
-  }
+  BufWriter sink(photoBuf, PHOTO_MAX_BYTES);
+  int written = http.writeToStream(&sink);
   http.end();
   setLed(false, false, false);
-  if (got == (size_t)len) {
-    photoLen = got;
-    Serial.printf("[photo] %s: %u bytes by %s\n", p.hex, (unsigned)got, photoCredit);
+  if (written > 0 && !sink.overflow && (len <= 0 || (size_t)len == sink.len)) {
+    photoLen = sink.len;
+    Serial.printf("[photo] %s: %u bytes by %s\n", p.hex, (unsigned)photoLen, photoCredit);
   } else {
-    Serial.printf("[photo] short read %u/%d\n", (unsigned)got, len);
+    Serial.printf("[photo] download problem (%d, got %u of %d%s)\n", written, (unsigned)sink.len, len, sink.overflow ? ", too big" : "");
   }
 }
 #else
@@ -1781,6 +1840,10 @@ void setup() {
   touchSPI.begin(XPT_CLK, XPT_MISO, XPT_MOSI, XPT_CS);
   touch.begin(touchSPI);
   touch.setRotation(SCREEN_ROTATION);
+
+#if PLANES_ENABLED && PLANES_PHOTOS
+  photoBuf = (uint8_t*)malloc(PHOTO_MAX_BYTES);  // reserve it now while memory is still in one piece
+#endif
 
   prefs.begin("followers", false);
   ig.count = prefs.getLong(ig.prefKey, -1);   // show the last known numbers right away
