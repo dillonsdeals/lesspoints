@@ -131,7 +131,7 @@
 #define HOME_LON 0.0
 #endif
 #ifndef PLANES_RADIUS_NM
-#define PLANES_RADIUS_NM 25         // search radius in nautical miles (25 nm = about 29 miles)
+#define PLANES_RADIUS_NM 10         // search radius in nautical miles (10 nm = about 11.5 miles)
 #endif
 #ifndef PLANES_REFRESH_SEC
 #define PLANES_REFRESH_SEC 15
@@ -366,6 +366,7 @@ static unsigned long lastPlanesMs = 0, nextPlanesMs = 0;
 static bool   planesEverFetched = false, forcePlanes = false;
 static String planesErr;
 static float  homeLat = HOME_LAT, homeLon = HOME_LON;
+static int    radiusNm = PLANES_RADIUS_NM;   // shrinks automatically if the sky is too busy to fit in memory
 static bool   homeKnown = (HOME_LAT != 0.0) || (HOME_LON != 0.0);
 static String homeName;
 static uint8_t* photoBuf = nullptr;     // JPEG of the aircraft on screen
@@ -1402,7 +1403,8 @@ static void fetchPlanes() {
   http.useHTTP10(true);
   http.setUserAgent("ESP32-FollowerDisplay/1.0");
   String url = String(PLANES_API_BASE) + "/v2/lat/" + String(homeLat, 4) + "/lon/" + String(homeLon, 4) +
-               "/dist/" + String(PLANES_RADIUS_NM);
+               "/dist/" + String(radiusNm);
+  Serial.printf("[planes] GET %s (free heap %u)\n", url.c_str(), ESP.getFreeHeap());
   if (!http.begin(client, url)) { planesErr = "begin failed"; setLed(false, false, false); return; }
   int code = http.GET();
   if (code != 200) { planesErr = "aircraft feed: " + httpErr(code); http.end(); setLed(false, false, false); return; }
@@ -1416,7 +1418,15 @@ static void fetchPlanes() {
   DeserializationError e = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
   http.end();
   setLed(false, false, false);
-  if (e) { planesErr = String("aircraft JSON: ") + e.c_str(); Serial.println(planesErr); return; }
+  if (e) {
+    planesErr = String("aircraft feed: ") + e.c_str();
+    if (e == DeserializationError::NoMemory && radiusNm > 3) {
+      radiusNm /= 2;                       // too many aircraft for the board's memory: look closer
+      planesErr += ", shrinking search to " + distStr(radiusNm);
+    }
+    Serial.println(planesErr);
+    return;
+  }
 
   planesTotal = doc["total"] | 0;
   Plane tmp[PLANES_MAX];
@@ -1548,12 +1558,23 @@ static void drawOverhead() {
     g.setTextDatum(MC_DATUM);
     g.setFreeFont(FONT_B12);
     g.setTextColor(C_GOLD_L, C_BG);
-    g.drawString(planesEverFetched ? "Nothing overhead right now" : "Scanning the sky...", c.ox + SCR_W / 2, c.oy + ZOOM_H / 2 - 22);
-    g.setTextFont(2);
-    g.setTextColor(C_MUTED, C_BG);
-    String where = "within " + distStr(PLANES_RADIUS_NM) + (homeName.length() ? " of " + homeName : String(""));
-    g.drawString(where, c.ox + SCR_W / 2, c.oy + ZOOM_H / 2 + 6);
-    g.drawString("checks every " + String(PLANES_REFRESH_SEC) + " seconds", c.ox + SCR_W / 2, c.oy + ZOOM_H / 2 + 26);
+    if (planesErr.length() && !planesEverFetched) {
+      g.setTextColor(C_WARN, C_BG);
+      g.drawString("Can't reach the aircraft feed", c.ox + SCR_W / 2, c.oy + ZOOM_H / 2 - 22);
+      g.setTextFont(2);
+      g.setTextColor(C_MUTED, C_BG);
+      String e1 = planesErr;
+      while (g.textWidth(e1) > SCR_W - 16 && e1.length() > 4) e1.remove(e1.length() - 1);
+      g.drawString(e1, c.ox + SCR_W / 2, c.oy + ZOOM_H / 2 + 6);
+      g.drawString("retrying...", c.ox + SCR_W / 2, c.oy + ZOOM_H / 2 + 26);
+    } else {
+      g.drawString(planesEverFetched ? "Nothing overhead right now" : "Scanning the sky...", c.ox + SCR_W / 2, c.oy + ZOOM_H / 2 - 22);
+      g.setTextFont(2);
+      g.setTextColor(C_MUTED, C_BG);
+      String where = "within " + distStr(radiusNm) + (homeName.length() ? " of " + homeName : String(""));
+      g.drawString(where, c.ox + SCR_W / 2, c.oy + ZOOM_H / 2 + 6);
+      g.drawString("checks every " + String(PLANES_REFRESH_SEC) + " seconds", c.ox + SCR_W / 2, c.oy + ZOOM_H / 2 + 26);
+    }
     c.done();
     photoDrawnKey[0] = 0;
     return;

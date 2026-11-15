@@ -45,7 +45,7 @@
 #define PLANES_ENABLED      1
 #define HOME_LAT            0.0     // your latitude, e.g. 40.7128  (0,0 = guess from the internet connection)
 #define HOME_LON            0.0     // your longitude, e.g. -74.0060
-#define PLANES_RADIUS_NM    25      // how far to look, in nautical miles (25 nm = about 29 miles)
+#define PLANES_RADIUS_NM    10      // how far to look, in nautical miles (10 nm = about 11.5 miles)
 #define PLANES_REFRESH_SEC  15
 #define PLANES_UNITS_MILES  1       // 1 = miles / mph, 0 = nautical miles / knots
 #define PLANES_ROUTES       1       // show where the flight is going
