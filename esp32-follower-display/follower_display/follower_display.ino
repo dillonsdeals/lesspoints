@@ -1249,14 +1249,14 @@ static void drawWobblyText(TFT_eSPI& g, const char* text, int cx, int y, const G
 }
 
 static const char* const RG_LINES[] = {
-  "A baby's gotta do what a baby's gotta do",
-  "Hang on to your diapies, babies!",
-  "REPTAR!",
-  "Let's go to the playpen!",
-  "That's a good idea, Tommy!",
-  "You dumb babies!",
-  "New baby in the playpen!",
-  "Chuckie, we gotta celebrate!",
+  "A follower's gotta do what a follower's gotta do",
+  "Hang on to your diapies, we got a new one!",
+  "REPTAR-sized news: someone followed!",
+  "Another one joined the playpen!",
+  "That's a good idea, following Dillon!",
+  "Somebody hit follow!",
+  "Welcome to the crew, new follower!",
+  "The playpen just got bigger!",
 };
 
 static void rugratsParty(const Platform& p) {
@@ -1292,8 +1292,8 @@ static void rugratsParty(const Platform& p) {
     delay(35);
   }
   // 2) the words
-  drawWobblyText(tft, "NEW BABY!", cx, cy - 26, FONT_B18, seed);
-  drawWobblyText(tft, plus.c_str(), cx, cy + 20, FONT_B24, seed >> 5);
+  drawWobblyText(tft, p.delta == 1 ? "NEW FOLLOWER!" : "NEW FOLLOWERS!", cx, cy - 26, FONT_B12, seed);
+  drawWobblyText(tft, plus.c_str(), cx, cy + 22, FONT_B24, seed >> 5);
   tft.setTextFont(2);
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(RG_WHITE, RG_PURPLE);
