@@ -258,11 +258,23 @@ struct Platform {
   String      err;
 };
 
+// Money rain pieces: gold coins and green bills.
+struct Money { float x, y, vx, vy; uint8_t kind; uint8_t size; };   // kind 0 = coin, 1 = bill
+
+// Prototypes. Functions with default arguments are declared here (defaults live only here),
+// which keeps the Arduino .ino preprocessor from tripping over them.
 static bool fetchInstagramApi(long& out, String& err);
 static bool fetchTikTokApi(long& out, String& err);
 static bool scrapeInstagram(long& out, String& err);
 static bool scrapeTikTok(long& out, String& err);
 static String wifiNames();
+static void drawTicker(TFT_eSPI& g, int x, int cy, long delta, uint16_t good, uint16_t bad, uint16_t bg,
+                       char anchor = 'C', const char* suffix = "");
+static void drawCard(int x, const Platform& p, long showCount = -2, bool hideDelta = false);
+static void drawTotal(long showTotal = -2, bool hideDelta = false);
+static void drawZoomValue(long showValue = -2, bool hideDelta = false);
+static void drawFullscreen(long showValue = -2, bool hideDelta = false);
+static void drawMoney(TFT_eSPI& g, const Money& m);
 
 Platform ig = {"Instagram", INSTAGRAM_USERNAME, INSTAGRAM_SOURCE, fetchInstagramApi, scrapeInstagram,
                "instagram", "ig_last", C_IG, C_IG2, -1, -1, 0, false, ""};
@@ -687,7 +699,7 @@ static void drawFooter() {
 
 // Stock-ticker style change: a little triangle plus the number. anchor: 'L', 'C' or 'R'.
 static void drawTicker(TFT_eSPI& g, int x, int cy, long delta, uint16_t good, uint16_t bad, uint16_t bg,
-                       char anchor = 'C', const char* suffix = "") {
+                       char anchor, const char* suffix) {
   if (delta == 0) return;
   g.setTextFont(2);
   String t = fmtNum(labs(delta)) + suffix;
@@ -744,7 +756,7 @@ static void drawCardInto(TFT_eSPI& g, int ox, int oy, const Platform& p, long sh
   }
 }
 
-static void drawCard(int x, const Platform& p, long showCount = -2, bool hideDelta = false) {
+static void drawCard(int x, const Platform& p, long showCount, bool hideDelta) {
   Canvas c(x, CARD_Y, CARD_W, CARD_H);
   drawCardInto(*c.g, c.ox, c.oy, p, showCount, hideDelta);
   c.done();
@@ -757,7 +769,7 @@ static long currentTotal() {
   return any ? t : -1;
 }
 
-static void drawTotal(long showTotal = -2, bool hideDelta = false) {
+static void drawTotal(long showTotal, bool hideDelta) {
   Canvas c(0, TOTAL_Y, SCR_W, TOTAL_H);
   TFT_eSPI& g = *c.g;
   int ox = c.ox, oy = c.oy;
@@ -825,7 +837,7 @@ static void drawZoomFrame() {
 }
 
 // The number (and the change line) of the zoomed view. Redrawn on every update / animation frame.
-static void drawZoomValue(long showValue = -2, bool hideDelta = false) {
+static void drawZoomValue(long showValue, bool hideDelta) {
   const Platform* p = zoomPlatform();
   long value = (showValue != -2) ? showValue : (p ? p->count : currentTotal());
   {
@@ -888,7 +900,7 @@ static void drawZoomValue(long showValue = -2, bool hideDelta = false) {
   }
 }
 
-static void drawFullscreen(long showValue = -2, bool hideDelta = false) {
+static void drawFullscreen(long showValue, bool hideDelta) {
   drawZoomFrame();
   drawZoomValue(showValue, hideDelta);
 }
@@ -962,8 +974,6 @@ static void animateCountUp() {
 #endif
 }
 
-// Money rain pieces: gold coins and green bills.
-struct Money { float x, y, vx, vy; uint8_t kind; uint8_t size; };   // kind 0 = coin, 1 = bill
 static void drawMoney(TFT_eSPI& g, const Money& m) {
   int x = (int)m.x, y = (int)m.y;
   if (m.kind == 0) {
