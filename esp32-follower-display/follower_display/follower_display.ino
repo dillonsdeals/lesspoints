@@ -1209,7 +1209,7 @@ static const uint16_t NY_COLORS[] = {C_GOLD_L, TFT_WHITE, 0xFF56 /* champagne */
 
 static void drawSkyline() {
   // buildings
-  struct B { uint8_t x, w, h; } bl[] = {
+  struct B { int16_t x, w, h; } bl[] = {
     {0,18,34},{20,14,50},{36,22,28},{60,16,62},{78,12,40},{92,24,46},{118,14,58},{134,20,36},
     {156,16,70},{174,22,44},{198,14,52},{214,26,30},{242,16,64},{260,20,42},{282,14,56},{298,22,38}
   };
