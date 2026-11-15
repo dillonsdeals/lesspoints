@@ -185,6 +185,23 @@ python3 bridge/follower_bridge.py --instagram yourhandle --tiktok yourhandle
 Then set the source(s) to `SOURCE_BRIDGE` and point `BRIDGE_URL` at
 `http://<that computer's IP>:8787/followers`. (On a hotspot the computer must be on the hotspot too.)
 
+## Plane tracker
+
+The same screen doubles as a radar. **Tap the header title** to switch between the follower counter
+and the plane tracker (it remembers which one you left it on).
+
+* **Radar**: your location in the centre, aircraft within `PLANES_RADIUS_NM` plotted by distance and
+  bearing, each with a heading tick and the nearest three labelled. A sweep rotates like a real scope.
+* **List**: the five nearest aircraft with callsign, distance, type and altitude. Tap one (or tap the
+  radar for the nearest) to open its detail card: airline, route (`JFK - LAX` plus city names), type,
+  registration, altitude with climbing/descending, speed, heading, distance and bearing. Tap to go back.
+* Data comes from the free [adsb.lol](https://adsb.lol) community feed. No key needed. Refreshes every
+  `PLANES_REFRESH_SEC` seconds. Tap the footer to refresh now.
+* Set `HOME_LAT` / `HOME_LON` in `config.h` for an accurate centre. Left at 0, the display guesses a
+  rough location from your internet connection, which is fine on home Wi-Fi but can be off by a lot on
+  a phone hotspot.
+* `PLANES_ENABLED 0` removes the feature entirely.
+
 ## Animations
 
 * **Every new follower**: the number rolls up from the old value to the new one, then the card

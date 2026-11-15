@@ -40,6 +40,16 @@
 // #define TOUCH_MIN_Y 240
 // #define TOUCH_MAX_Y 3800
 
+// ---------------- Plane tracker ----------------
+// Tap the header title to switch between the follower counter and the radar.
+#define PLANES_ENABLED      1
+#define HOME_LAT            0.0     // your latitude, e.g. 40.7128  (0,0 = guess from the internet connection)
+#define HOME_LON            0.0     // your longitude, e.g. -74.0060
+#define PLANES_RADIUS_NM    25      // how far to look, in nautical miles (25 nm = about 29 miles)
+#define PLANES_REFRESH_SEC  15
+#define PLANES_UNITS_MILES  1       // 1 = miles / mph, 0 = nautical miles / knots
+#define PLANES_ROUTES       1       // show where the nearest flights are going
+
 // ---------------- Fun ----------------
 #define ANIMATE_COUNT_UP      1   // numbers roll up when you gain followers
 #define CELEBRATE_MILESTONES  1   // confetti when a count crosses a round number (100s, 500s, 1,000s...)

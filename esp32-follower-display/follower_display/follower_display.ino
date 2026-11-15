@@ -119,6 +119,32 @@
 #ifndef TOUCH_MAX_Y
 #define TOUCH_MAX_Y 3800
 #endif
+// ---- plane tracker ----
+#ifndef PLANES_ENABLED
+#define PLANES_ENABLED 1
+#endif
+#ifndef HOME_LAT
+#define HOME_LAT 0.0                // 0,0 = find my rough location from the internet connection
+#endif
+#ifndef HOME_LON
+#define HOME_LON 0.0
+#endif
+#ifndef PLANES_RADIUS_NM
+#define PLANES_RADIUS_NM 25         // search radius in nautical miles (25 nm = about 29 miles)
+#endif
+#ifndef PLANES_REFRESH_SEC
+#define PLANES_REFRESH_SEC 15
+#endif
+#ifndef PLANES_UNITS_MILES
+#define PLANES_UNITS_MILES 1        // 1 = miles / mph, 0 = nautical miles / knots
+#endif
+#ifndef PLANES_ROUTES
+#define PLANES_ROUTES 1             // look up where the nearest flights are going
+#endif
+#ifndef PLANES_API_BASE
+#define PLANES_API_BASE "https://api.adsb.lol"
+#endif
+#define PLANES_MAX 8
 #ifndef ANIMATE_COUNT_UP
 #define ANIMATE_COUNT_UP 1          // numbers roll up when followers increase
 #endif
@@ -261,6 +287,27 @@ struct Platform {
 // Money rain pieces: gold coins and green bills.
 struct Money { float x, y, vx, vy; uint8_t kind; uint8_t size; };   // kind 0 = coin, 1 = bill
 
+// One aircraft from the ADS-B feed
+struct Plane {
+  char  callsign[10];
+  char  type[6];
+  char  reg[10];
+  char  op[28];        // operator / airline when known
+  char  route[12];     // "JFK - LAX" when known
+  char  routeNames[40];
+  long  alt;           // feet
+  bool  onGround;
+  float gs;            // knots
+  float track;         // degrees
+  int   vrate;         // feet per minute
+  float dist;          // nautical miles from home
+  float dir;           // bearing from home, degrees
+  float lat, lon;
+};
+
+// The two things this screen can be
+enum Mode { MODE_FOLLOWERS, MODE_PLANES };
+
 // Prototypes. Functions with default arguments are declared here (defaults live only here),
 // which keeps the Arduino .ino preprocessor from tripping over them.
 static bool fetchInstagramApi(long& out, String& err);
@@ -275,6 +322,12 @@ static void drawTotal(long showTotal = -2, bool hideDelta = false);
 static void drawZoomValue(long showValue = -2, bool hideDelta = false);
 static void drawFullscreen(long showValue = -2, bool hideDelta = false);
 static void drawMoney(TFT_eSPI& g, const Money& m);
+static void drawPlanesDash();
+static void drawStat(TFT_eSPI& g, int x, int y, const char* label, const String& value, uint16_t col = C_TEXT);
+static void drawRadar();
+static void drawPlaneZoom();
+static void fetchPlanes();
+static void setMode(Mode m);
 
 Platform ig = {"Instagram", INSTAGRAM_USERNAME, INSTAGRAM_SOURCE, fetchInstagramApi, scrapeInstagram,
                "instagram", "ig_last", C_IG, C_IG2, -1, -1, 0, false, ""};
@@ -296,6 +349,19 @@ static bool   footerIsError = false;
 // What the screen is showing: the dashboard, or one panel blown up full screen.
 enum View { VIEW_DASH, VIEW_IG, VIEW_TT, VIEW_TOTAL };
 static View view = VIEW_DASH;
+
+static Mode   mode = MODE_FOLLOWERS;
+static Plane  planes[PLANES_MAX];
+static int    planeCount = 0;
+static int    planesTotal = 0;          // everything the feed saw in range
+static int    zoomPlane = -1;           // -1 = radar screen, otherwise index into planes[]
+static unsigned long lastPlanesMs = 0, nextPlanesMs = 0, lastRadarMs = 0;
+static bool   planesEverFetched = false, forcePlanes = false;
+static String planesErr;
+static float  homeLat = HOME_LAT, homeLon = HOME_LON;
+static bool   homeKnown = (HOME_LAT != 0.0) || (HOME_LON != 0.0);
+static String homeName;
+static float  sweepDeg = 0;
 
 // =====================================================================
 //  small helpers
@@ -654,9 +720,18 @@ static void drawHeader() {
   Canvas c(0, 0, SCR_W, HDR_H);
   TFT_eSPI& g = *c.g;
   g.fillRect(c.ox, c.oy, SCR_W, HDR_H, C_BG);
-  const char* title = view == VIEW_IG ? "INSTAGRAM" : view == VIEW_TT ? "TIKTOK" :
-                      view == VIEW_TOTAL ? "TOTAL BALANCE" : DISPLAY_TITLE;
-  uint16_t tcol = view == VIEW_IG ? C_IG : view == VIEW_TT ? C_TT : C_ACCENT_L;
+  String titleS;
+  uint16_t tcol = C_ACCENT_L;
+  if (mode == MODE_PLANES) {
+    if (zoomPlane >= 0 && zoomPlane < planeCount) { titleS = planes[zoomPlane].callsign; tcol = C_GOOD; }
+    else { titleS = "RADAR"; if (homeName.length()) titleS += "  " + homeName; tcol = C_GOOD; }
+    titleS.toUpperCase();
+  } else {
+    titleS = view == VIEW_IG ? "INSTAGRAM" : view == VIEW_TT ? "TIKTOK" :
+             view == VIEW_TOTAL ? "TOTAL BALANCE" : DISPLAY_TITLE;
+    tcol = view == VIEW_IG ? C_IG : view == VIEW_TT ? C_TT : C_ACCENT_L;
+  }
+  const char* title = titleS.c_str();
   g.setTextColor(tcol, C_BG);
   g.setTextDatum(ML_DATUM);
   g.setFreeFont(FONT_B9);
@@ -680,7 +755,17 @@ static void drawFooter() {
   g.setTextDatum(MC_DATUM);
   String msg = footerMsg;
   uint16_t col = footerIsError ? C_WARN : C_MUTED;
-  if (!msg.length()) {
+  if (mode == MODE_PLANES && !footerIsError) {
+    msg = "";
+    if (planesErr.length()) { msg = planesErr; col = C_WARN; }
+    else if (!planesEverFetched) msg = "Looking for aircraft...";
+    else {
+      unsigned long ago = (millis() - lastPlanesMs) / 1000;
+      msg = "Updated " + String(ago) + "s ago  |  " + String(planesTotal) + " aircraft in range";
+      if (zoomPlane >= 0) msg += "  |  tap to go back";
+      else msg += ((millis() / 6000) % 2) ? "  |  tap a plane for details" : "  |  tap title: followers";
+    }
+  } else if (!msg.length()) {
     if (!everFetched) msg = "Waiting for first update...";
     else {
       unsigned long ago = (millis() - lastFetchMs) / 1000;
@@ -688,7 +773,10 @@ static void drawFooter() {
       msg = "Updated " + String(ago < 60 ? String(ago) + "s" : String(ago / 60) + "m") + " ago";
       msg += "  |  next " + String(left / 60) + ":" + (left % 60 < 10 ? "0" : "") + String(left % 60);
       if (view != VIEW_DASH) msg += "  |  tap to go back";
-      else msg += ((millis() / 6000) % 2) ? "  |  tap a panel to zoom" : "  |  tap here to refresh";
+      else {
+        int hint = (millis() / 6000) % (PLANES_ENABLED ? 3 : 2);
+        msg += hint == 0 ? "  |  tap a panel to zoom" : hint == 1 ? "  |  tap here to refresh" : "  |  tap title: planes";
+      }
     }
   }
   while (g.textWidth(msg) > SCR_W - 8 && msg.length() > 4) msg = msg.substring(0, msg.length() - 4) + "...";
@@ -907,6 +995,11 @@ static void drawFullscreen(long showValue, bool hideDelta) {
 
 static void drawAll() {
   drawHeader();
+  if (mode == MODE_PLANES) {
+    if (zoomPlane >= 0 && zoomPlane < planeCount) drawPlaneZoom(); else drawPlanesDash();
+    drawFooter();
+    return;
+  }
   if (view == VIEW_DASH) {
     drawCard(CARD_X1, ig);
     drawCard(CARD_X2, tt);
@@ -919,6 +1012,16 @@ static void drawAll() {
 
 static void setView(View v) {
   view = v;
+  tft.fillScreen(C_BG);
+  drawAll();
+}
+
+static void setMode(Mode m) {
+  mode = m;
+  view = VIEW_DASH;
+  zoomPlane = -1;
+  prefs.putUChar("mode", (uint8_t)m);
+  if (m == MODE_PLANES && !planesEverFetched) forcePlanes = true;
   tft.fillScreen(C_BG);
   drawAll();
 }
@@ -948,6 +1051,7 @@ static float easeOut(float t) { return 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - 
 // Roll the numbers up from their previous values to the new ones.
 static void animateCountUp() {
 #if ANIMATE_COUNT_UP
+  if (mode != MODE_FOLLOWERS) return;
   bool igUp = ig.source != SOURCE_OFF && ig.ok && ig.prev >= 0 && ig.count > ig.prev;
   bool ttUp = tt.source != SOURCE_OFF && tt.ok && tt.prev >= 0 && tt.count > tt.prev;
   if (!igUp && !ttUp) return;
@@ -989,7 +1093,7 @@ static void drawMoney(TFT_eSPI& g, const Money& m) {
 // A one-second burst of coins and bills out of a card plus a big "+N". Plays for every gain, even +1.
 static void miniCelebrate(int x, const Platform& p) {
 #if ANIMATE_COUNT_UP
-  if (view != VIEW_DASH) {            // zoomed in: just pulse the LED
+  if (view != VIEW_DASH || mode != MODE_FOLLOWERS) {   // not looking at the cards: just pulse the LED
     for (int i = 0; i < 4; i++) { setLed(false, true, false); delay(100); setLed(false, false, false); delay(100); }
     return;
   }
@@ -1193,6 +1297,323 @@ static void fetchAll() {
 }
 
 // =====================================================================
+//  Plane tracker
+// =====================================================================
+static const char* compass(float deg) {
+  static const char* pts[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+  int i = (int)((deg + 22.5f) / 45.0f) % 8;
+  if (i < 0) i += 8;
+  return pts[i];
+}
+static String distStr(float nm) {
+  float v = PLANES_UNITS_MILES ? nm * 1.15078f : nm;
+  return String(v, v < 10 ? 1 : 0) + (PLANES_UNITS_MILES ? " mi" : " nm");
+}
+static String speedStr(float kt) {
+  float v = PLANES_UNITS_MILES ? kt * 1.15078f : kt;
+  return String((int)(v + 0.5f)) + (PLANES_UNITS_MILES ? " mph" : " kt");
+}
+static String altStr(const Plane& p) {
+  if (p.onGround) return "on ground";
+  return fmtNum(p.alt) + " ft";
+}
+
+// Rough location from the internet connection, used when HOME_LAT/HOME_LON are not set.
+static void locateHome() {
+  String body;
+  int code = httpRequest("http://ip-api.com/json/?fields=status,lat,lon,city", false, "", nullptr, nullptr, body);
+  JsonDocument doc;
+  String err;
+  if (code == 200 && parseJson(body, doc, err) && doc["lat"].is<float>()) {
+    homeLat = doc["lat"]; homeLon = doc["lon"];
+    homeName = doc["city"] | "";
+    homeKnown = true;
+    Serial.printf("[planes] located near %s (%.3f, %.3f)\n", homeName.c_str(), homeLat, homeLon);
+  } else {
+    Serial.printf("[planes] could not locate (%d)\n", code);
+  }
+}
+
+#if PLANES_ROUTES
+// Ask adsb.lol where the nearest flights are going.
+static void lookupRoutes() {
+  String body = "{\"planes\":[";
+  int n = 0;
+  for (int i = 0; i < planeCount && n < 5; i++) {
+    if (!planes[i].callsign[0]) continue;
+    if (n++) body += ",";
+    body += "{\"callsign\":\"" + String(planes[i].callsign) + "\",\"lat\":" + String(planes[i].lat, 3) +
+            ",\"lng\":" + String(planes[i].lon, 3) + "}";
+  }
+  body += "]}";
+  if (!n) return;
+  WiFiClientSecure client; client.setInsecure();
+  HTTPClient http;
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.useHTTP10(true);
+  http.setUserAgent("ESP32-FollowerDisplay/1.0");
+  if (!http.begin(client, String(PLANES_API_BASE) + "/api/0/routeset")) return;
+  http.addHeader("Content-Type", "application/json");
+  int code = http.POST(body);
+  if (code != 200) { Serial.printf("[planes] routes HTTP %d\n", code); http.end(); return; }
+  JsonDocument filter;
+  filter[0]["callsign"] = true;
+  filter[0]["_airports"][0]["iata"] = true;
+  filter[0]["_airports"][0]["location"] = true;
+  JsonDocument doc;
+  DeserializationError e = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+  if (e) { Serial.printf("[planes] routes JSON: %s\n", e.c_str()); return; }
+  for (JsonObject r : doc.as<JsonArray>()) {
+    const char* cs = r["callsign"] | "";
+    JsonArray ap = r["_airports"].as<JsonArray>();
+    if (ap.size() < 2) continue;
+    for (int i = 0; i < planeCount; i++) {
+      if (strcmp(planes[i].callsign, cs) != 0) continue;
+      snprintf(planes[i].route, sizeof planes[i].route, "%s - %s", ap[0]["iata"] | "?", ap[ap.size() - 1]["iata"] | "?");
+      snprintf(planes[i].routeNames, sizeof planes[i].routeNames, "%s to %s", ap[0]["location"] | "", ap[ap.size() - 1]["location"] | "");
+    }
+  }
+}
+#endif
+
+static void fetchPlanes() {
+  if (WiFi.status() != WL_CONNECTED) { planesErr = "No Wi-Fi"; return; }
+  if (!homeKnown) locateHome();
+  if (!homeKnown) { planesErr = "Set HOME_LAT / HOME_LON in config.h"; return; }
+  setLed(false, false, true);
+
+  WiFiClientSecure client; client.setInsecure();
+  HTTPClient http;
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.useHTTP10(true);
+  http.setUserAgent("ESP32-FollowerDisplay/1.0");
+  String url = String(PLANES_API_BASE) + "/v2/lat/" + String(homeLat, 4) + "/lon/" + String(homeLon, 4) +
+               "/dist/" + String(PLANES_RADIUS_NM);
+  if (!http.begin(client, url)) { planesErr = "begin failed"; setLed(false, false, false); return; }
+  int code = http.GET();
+  if (code != 200) { planesErr = "aircraft feed: " + httpErr(code); http.end(); setLed(false, false, false); return; }
+
+  // Only keep the fields we show, so a busy sky fits in memory.
+  JsonDocument filter;
+  filter["total"] = true;
+  static const char* keys[] = {"flight", "t", "r", "alt_baro", "gs", "track", "lat", "lon", "dst", "dir", "baro_rate", "ownOp"};
+  for (const char* k : keys) filter["ac"][0][k] = true;
+  JsonDocument doc;
+  DeserializationError e = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+  setLed(false, false, false);
+  if (e) { planesErr = String("aircraft JSON: ") + e.c_str(); Serial.println(planesErr); return; }
+
+  planesTotal = doc["total"] | 0;
+  Plane tmp[PLANES_MAX];
+  int n = 0;
+  for (JsonObject ac : doc["ac"].as<JsonArray>()) {
+    if (!ac["dst"].is<float>() || !ac["lat"].is<float>()) continue;
+    float d = ac["dst"];
+    int pos = n;
+    while (pos > 0 && tmp[pos - 1].dist > d) pos--;
+    if (pos >= PLANES_MAX) continue;
+    if (n < PLANES_MAX) n++;
+    for (int k = n - 1; k > pos; k--) tmp[k] = tmp[k - 1];
+    Plane& p = tmp[pos];
+    memset(&p, 0, sizeof p);
+    strlcpy(p.callsign, ac["flight"] | "", sizeof p.callsign);
+    for (int k = strlen(p.callsign) - 1; k >= 0 && p.callsign[k] == ' '; k--) p.callsign[k] = 0;
+    strlcpy(p.type, ac["t"] | "", sizeof p.type);
+    strlcpy(p.reg,  ac["r"] | "", sizeof p.reg);
+    strlcpy(p.op,   ac["ownOp"] | "", sizeof p.op);
+    if (!p.callsign[0]) strlcpy(p.callsign, p.reg[0] ? p.reg : "------", sizeof p.callsign);
+    if (ac["alt_baro"].is<long>()) p.alt = ac["alt_baro"].as<long>(); else p.onGround = true;
+    p.gs = ac["gs"] | 0.0f;
+    p.track = ac["track"] | 0.0f;
+    p.vrate = ac["baro_rate"] | 0;
+    p.dist = d;
+    p.dir = ac["dir"] | 0.0f;
+    p.lat = ac["lat"]; p.lon = ac["lon"];
+  }
+  // keep the zoomed plane in view if it is still around
+  char keep[10] = "";
+  if (zoomPlane >= 0 && zoomPlane < planeCount) strlcpy(keep, planes[zoomPlane].callsign, sizeof keep);
+  memcpy(planes, tmp, sizeof planes);
+  planeCount = n;
+  if (keep[0]) {
+    zoomPlane = -1;
+    for (int i = 0; i < planeCount; i++) if (!strcmp(planes[i].callsign, keep)) zoomPlane = i;
+  }
+#if PLANES_ROUTES
+  if (planeCount) lookupRoutes();
+#endif
+  planesErr = "";
+  planesEverFetched = true;
+  lastPlanesMs = millis();
+  nextPlanesMs = lastPlanesMs + (unsigned long)PLANES_REFRESH_SEC * 1000UL;
+  Serial.printf("[planes] %d in range, nearest %s %s (free heap %u)\n", planesTotal,
+                planeCount ? planes[0].callsign : "-", planeCount ? distStr(planes[0].dist).c_str() : "", ESP.getFreeHeap());
+}
+
+// ---- radar screen: scope on the left, nearest aircraft on the right ----
+#define RADAR_W   192
+#define RADAR_Y   (HDR_H)
+#define RADAR_H   (FOOT_Y - HDR_H)
+#define RADAR_CX  96
+#define RADAR_CY  (RADAR_H / 2)
+#define RADAR_R   84
+#define LIST_X    196
+#define LIST_W    (SCR_W - LIST_X - 2)
+#define LIST_ROW  36
+#define LIST_ROWS 5
+
+static void drawRadar() {
+  Canvas c(0, RADAR_Y, RADAR_W, RADAR_H, 8);
+  TFT_eSPI& g = *c.g;
+  int ox = c.ox, oy = c.oy, cx = ox + RADAR_CX, cy = oy + RADAR_CY;
+  g.fillRect(ox, oy, RADAR_W, RADAR_H, C_BG);
+  g.fillCircle(cx, cy, RADAR_R, C_INSET);
+  for (int k = 1; k <= 3; k++) g.drawCircle(cx, cy, RADAR_R * k / 3, C_GOLD_D);
+  g.drawFastHLine(cx - RADAR_R, cy, 2 * RADAR_R, C_GOLD_D);
+  g.drawFastVLine(cx, cy - RADAR_R, 2 * RADAR_R, C_GOLD_D);
+  // sweep with a short trail
+  for (int t = 0; t < 4; t++) {
+    float a = (sweepDeg - t * 7) * DEG_TO_RAD;
+    uint16_t col = t == 0 ? C_GOOD : t == 1 ? 0x2D08 : 0x1C66;
+    g.drawLine(cx, cy, cx + (int)(sinf(a) * RADAR_R), cy - (int)(cosf(a) * RADAR_R), col);
+  }
+  g.setTextFont(1);
+  g.setTextDatum(MC_DATUM);
+  g.setTextColor(C_GOLD, C_BG);
+  g.drawString("N", cx, oy + 6);
+  g.setTextDatum(BL_DATUM);
+  g.setTextColor(C_MUTED, C_BG);
+  g.drawString(distStr(PLANES_RADIUS_NM), ox + 4, oy + RADAR_H - 3);
+  g.setTextDatum(BR_DATUM);
+  g.drawString(String(planesTotal) + " in range", ox + RADAR_W - 4, oy + RADAR_H - 3);
+  // aircraft, nearest last so it draws on top
+  for (int i = planeCount - 1; i >= 0; i--) {
+    const Plane& p = planes[i];
+    float f = p.dist / PLANES_RADIUS_NM; if (f > 1) f = 1;
+    float a = p.dir * DEG_TO_RAD;
+    int px = cx + (int)(sinf(a) * RADAR_R * f), py = cy - (int)(cosf(a) * RADAR_R * f);
+    uint16_t col = (i == (zoomPlane >= 0 ? zoomPlane : 0)) ? C_GOLD_L : C_GOOD;
+    float h = p.track * DEG_TO_RAD;
+    g.drawLine(px, py, px + (int)(sinf(h) * 8), py - (int)(cosf(h) * 8), col);
+    g.fillCircle(px, py, 3, col);
+    if (i < 3) {
+      g.setTextDatum(ML_DATUM);
+      g.setTextColor(col, C_INSET);
+      g.drawString(p.callsign, px + 6, py - 6);
+    }
+  }
+  g.fillCircle(cx, cy, 3, C_GOLD_L);     // you
+  c.done();
+}
+
+static void drawPlaneList() {
+  Canvas c(LIST_X, RADAR_Y, LIST_W, RADAR_H);
+  TFT_eSPI& g = *c.g;
+  int ox = c.ox, oy = c.oy;
+  g.fillRect(ox, oy, LIST_W, RADAR_H, C_BG);
+  g.fillRoundRect(ox, oy + 2, LIST_W, RADAR_H - 4, 8, C_GOLD_D);
+  g.fillRoundRect(ox + 1, oy + 3, LIST_W - 2, RADAR_H - 6, 7, C_CARD);
+  if (!planeCount) {
+    g.setTextFont(2);
+    g.setTextDatum(MC_DATUM);
+    g.setTextColor(C_MUTED, C_CARD);
+    g.drawString(planesEverFetched ? "No aircraft" : "Searching", ox + LIST_W / 2, oy + RADAR_H / 2 - 8);
+    g.drawString(planesEverFetched ? "nearby" : "the sky...", ox + LIST_W / 2, oy + RADAR_H / 2 + 8);
+    c.done();
+    return;
+  }
+  for (int i = 0; i < planeCount && i < LIST_ROWS; i++) {
+    const Plane& p = planes[i];
+    int ry = oy + 6 + i * LIST_ROW;
+    if (i) g.drawFastHLine(ox + 8, ry - 2, LIST_W - 16, C_GOLD_D);
+    g.setFreeFont(FONT_B9);
+    g.setTextDatum(TL_DATUM);
+    g.setTextColor(i == 0 ? C_GOLD_L : C_TEXT, C_CARD);
+    g.drawString(p.callsign, ox + 8, ry + 3);
+    g.setTextFont(2);
+    g.setTextDatum(TR_DATUM);
+    g.setTextColor(C_GOOD, C_CARD);
+    g.drawString(distStr(p.dist), ox + LIST_W - 8, ry + 2);
+    g.setTextDatum(TL_DATUM);
+    g.setTextColor(C_MUTED, C_CARD);
+    String l2 = p.type[0] ? p.type : "----";
+    l2 += "  ";
+    if (p.onGround) l2 += "ground"; else l2 += fmtNum(p.alt) + " ft";
+    g.drawString(l2, ox + 8, ry + 19);
+  }
+  c.done();
+}
+
+static void drawPlanesDash() {
+  drawRadar();
+  drawPlaneList();
+}
+
+static void drawStat(TFT_eSPI& g, int x, int y, const char* label, const String& value, uint16_t col) {
+  g.setTextFont(2);
+  g.setTextDatum(TL_DATUM);
+  g.setTextColor(C_MUTED, C_CARD);
+  g.drawString(label, x, y);
+  g.setFreeFont(FONT_B9);
+  g.setTextColor(col, C_CARD);
+  g.drawString(value, x, y + 17);
+}
+
+static void drawPlaneZoom() {
+  const Plane& p = planes[zoomPlane];
+  Canvas c(0, ZOOM_Y, SCR_W, ZOOM_H, 8);
+  TFT_eSPI& g = *c.g;
+  int ox = c.ox, oy = c.oy;
+  g.fillRect(ox, oy, SCR_W, ZOOM_H, C_BG);
+  g.fillRoundRect(ox + CARD_X1, oy + 2, SCR_W - 2 * CARD_X1, ZOOM_H - 4, 12, C_GOLD);
+  g.fillRoundRect(ox + CARD_X1 + 2, oy + 4, SCR_W - 2 * CARD_X1 - 4, ZOOM_H - 8, 11, C_CARD);
+  g.drawRoundRect(ox + CARD_X1 + 7, oy + 9, SCR_W - 2 * CARD_X1 - 14, ZOOM_H - 18, 8, C_GOLD_D);
+
+  int L = ox + CARD_X1 + 16, R = ox + SCR_W - CARD_X1 - 16;
+  g.setTextFont(2);
+  g.setTextDatum(TL_DATUM);
+  g.setTextColor(C_MUTED, C_CARD);
+  String who = p.op[0] ? String(p.op) : String("Aircraft");
+  while (g.textWidth(who) > 190 && who.length() > 3) who.remove(who.length() - 1);
+  g.drawString(who, L, oy + 14);
+  g.setTextDatum(TR_DATUM);
+  String tr = p.type;
+  if (p.reg[0]) { if (tr.length()) tr += "  "; tr += p.reg; }
+  g.drawString(tr, R, oy + 14);
+
+  g.setTextDatum(MC_DATUM);
+  if (p.route[0]) {
+    g.setFreeFont(FONT_B18);
+    g.setTextColor(C_GOLD_L, C_CARD);
+    g.drawString(p.route, ox + SCR_W / 2, oy + 50);
+    g.setTextFont(2);
+    g.setTextColor(C_MUTED, C_CARD);
+    String names = p.routeNames;
+    while (g.textWidth(names) > SCR_W - 60 && names.length() > 3) names.remove(names.length() - 1);
+    g.drawString(names, ox + SCR_W / 2, oy + 74);
+  } else {
+    g.setFreeFont(FONT_B18);
+    g.setTextColor(C_GOLD_L, C_CARD);
+    g.drawString(p.callsign, ox + SCR_W / 2, oy + 50);
+    g.setTextFont(2);
+    g.setTextColor(C_MUTED, C_CARD);
+    g.drawString("route unknown", ox + SCR_W / 2, oy + 74);
+  }
+
+  int colW = (R - L) / 3, y1 = oy + 94, y2 = oy + 138;
+  String altv = altStr(p);
+  uint16_t altc = p.vrate > 300 ? C_GOOD : p.vrate < -300 ? C_WARN : C_TEXT;
+  drawStat(g, L, y1, p.vrate > 300 ? "ALTITUDE  climbing" : p.vrate < -300 ? "ALTITUDE  descending" : "ALTITUDE", altv, altc);
+  drawStat(g, L + colW * 2, y1, "SPEED", speedStr(p.gs));
+  drawStat(g, L, y2, "DISTANCE", distStr(p.dist) + " " + compass(p.dir));
+  drawStat(g, L + colW, y2, "HEADING", String((int)p.track) + " " + compass(p.track));
+  drawStat(g, L + colW * 2, y2, "CALLSIGN", p.callsign);
+  c.done();
+}
+
+// =====================================================================
 //  Wi-Fi
 // =====================================================================
 static String wifiNames() {
@@ -1263,6 +1684,10 @@ void setup() {
   ig.count = prefs.getLong(ig.prefKey, -1);   // show the last known numbers right away
   tt.count = prefs.getLong(tt.prefKey, -1);
   lastTotal = currentTotal();
+#if PLANES_ENABLED
+  mode = prefs.getUChar("mode", 0) == 1 ? MODE_PLANES : MODE_FOLLOWERS;
+  if (mode == MODE_PLANES) forcePlanes = true;
+#endif
 
   splash("Looking for Wi-Fi", wifiNames());
   startWifi();
@@ -1287,6 +1712,20 @@ void setup() {
 // Zoomed in: tap anywhere to go back.
 static void handleTap(int x, int y) {
   Serial.printf("[touch] %d,%d\n", x, y);
+#if PLANES_ENABLED
+  if (y < HDR_H) { setMode(mode == MODE_PLANES ? MODE_FOLLOWERS : MODE_PLANES); return; }
+  if (mode == MODE_PLANES) {
+    if (zoomPlane >= 0) { zoomPlane = -1; tft.fillScreen(C_BG); drawAll(); return; }
+    if (y >= FOOT_Y) { forcePlanes = true; return; }
+    if (x >= LIST_X) {
+      int row = (y - RADAR_Y - 6) / LIST_ROW;
+      if (row >= 0 && row < planeCount && row < LIST_ROWS) { zoomPlane = row; tft.fillScreen(C_BG); drawAll(); }
+      return;
+    }
+    if (planeCount) { zoomPlane = 0; tft.fillScreen(C_BG); drawAll(); }
+    return;
+  }
+#endif
   if (view != VIEW_DASH) { setView(VIEW_DASH); return; }
   if (y >= CARD_Y && y < CARD_Y + CARD_H) {
     if (x < SCR_W / 2) { if (ig.source != SOURCE_OFF) setView(VIEW_IG); }
@@ -1316,6 +1755,20 @@ void loop() {
     fetchAll();
     if (WiFi.status() != WL_CONNECTED) nextFetchMs = millis() + 30000;   // retry soon
   }
+
+#if PLANES_ENABLED
+  if (mode == MODE_PLANES && (forcePlanes || (long)(millis() - nextPlanesMs) >= 0)) {
+    forcePlanes = false;
+    fetchPlanes();
+    if (planesErr.length()) nextPlanesMs = millis() + 20000;
+    drawAll();
+  }
+  if (mode == MODE_PLANES && zoomPlane < 0 && millis() - lastRadarMs >= 150) {
+    lastRadarMs = millis();
+    sweepDeg += 9; if (sweepDeg >= 360) sweepDeg -= 360;
+    drawRadar();
+  }
+#endif
 
   if (millis() - lastBarsMs >= 1000) {
     lastBarsMs = millis();
