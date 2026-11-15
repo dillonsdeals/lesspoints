@@ -1501,7 +1501,7 @@ static void fetchPlatform(Platform& p, JsonDocument& bridge, bool bridgeOk, cons
 
 static void fetchAll() {
   if (WiFi.status() != WL_CONNECTED) {
-    setFooter(wifiHint.length() ? wifiHint : "No Wi-Fi, looking for: " + wifiNames(), true);
+    setFooter(wifiHint.length() ? wifiHint : String("No Wi-Fi, looking for: ") + wifiNames(), true);
     return;
   }
   setLed(false, false, true);
@@ -2051,7 +2051,7 @@ static void ensureWifi() {
   if (WiFi.status() == WL_CONNECTED) { maybeUpgradeWifi(); return; }
   // Phone hotspots come and go (the phone sleeps, you walk away...), so keep looking.
   if (millis() - lastWifiTryMs > 15000) {
-    setFooter(wifiHint.length() ? wifiHint : "No Wi-Fi, looking for: " + wifiNames(), true);
+    setFooter(wifiHint.length() ? wifiHint : String("No Wi-Fi, looking for: ") + wifiNames(), true);
     if (tryWifi(8000)) {
       setFooter("Connected to " + WiFi.SSID(), false);
       forceRefresh = true;
