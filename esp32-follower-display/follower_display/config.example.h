@@ -3,9 +3,9 @@
 #pragma once
 
 // ---------------- Wi-Fi ----------------
-// List every network the display may use. It joins the strongest one it can see, and keeps
-// looking whenever it loses the connection, so you can put your home Wi-Fi AND your phone's
-// hotspot here and carry the display around.
+// List every network the display may use, MOST PREFERRED FIRST. It joins the first one it can
+// see, and if it is on a lower one (your hotspot) when a higher one (home) comes into range it
+// switches over within a couple of minutes. Put home first and the hotspot second.
 //
 // iPhone hotspot notes:
 //   * The network name is your phone's name (Settings > General > About > Name).

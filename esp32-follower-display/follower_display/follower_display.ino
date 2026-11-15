@@ -16,7 +16,6 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiMulti.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -262,10 +261,8 @@ TFT_eSprite spr(&tft);
 SPIClass touchSPI(VSPI);
 XPT2046_Touchscreen touch(XPT_CS, XPT_IRQ);
 Preferences prefs;
-WiFiMulti wifiMulti;
-
-// Every network the display may join. It picks the strongest one it can see,
-// so you can list your home Wi-Fi and your phone's hotspot together.
+// Every network the display may join, in order of preference: it joins the first one it can
+// see, and moves up the list when a preferred network comes into range (home beats hotspot).
 struct WifiCred { const char* ssid; const char* pass; };
 static const WifiCred WIFI_LIST[] = {
 #ifdef WIFI_NETWORKS
@@ -275,6 +272,8 @@ static const WifiCred WIFI_LIST[] = {
 #endif
 };
 static const size_t WIFI_COUNT = sizeof(WIFI_LIST) / sizeof(WIFI_LIST[0]);
+static int wifiIdx = -1;                        // which entry we are connected to
+static unsigned long lastWifiUpgradeMs = 0;
 
 typedef bool (*FetchFn)(long& out, String& err);
 
@@ -1948,23 +1947,69 @@ static void startWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(true);
-  for (size_t i = 0; i < WIFI_COUNT; i++) {
-    if (WIFI_LIST[i].ssid && *WIFI_LIST[i].ssid) wifiMulti.addAP(WIFI_LIST[i].ssid, WIFI_LIST[i].pass);
-  }
 }
 
-// Scan for any of the known networks and join the strongest one. Blocks for a few seconds.
+static bool joinWifi(size_t i, uint32_t timeoutMs) {
+  Serial.printf("[wifi] joining '%s'\n", WIFI_LIST[i].ssid);
+  WiFi.begin(WIFI_LIST[i].ssid, WIFI_LIST[i].pass);
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < timeoutMs) delay(100);
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiIdx = i;
+    lastWifiUpgradeMs = millis();
+    Serial.printf("[wifi] connected to '%s', IP %s\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+    return true;
+  }
+  WiFi.disconnect();
+  return false;
+}
+
+// Scan, then join the most preferred network that is in range. Blocks for a few seconds.
 static bool tryWifi(uint32_t timeoutMs) {
   lastWifiTryMs = millis();
   Serial.printf("[wifi] looking for: %s\n", wifiNames().c_str());
-  bool ok = wifiMulti.run(timeoutMs) == WL_CONNECTED;
-  if (ok) Serial.printf("[wifi] connected to '%s', IP %s\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
-  else    Serial.println("[wifi] none of the known networks answered");
-  return ok;
+  int n = WiFi.scanNetworks();
+  for (size_t i = 0; i < WIFI_COUNT; i++) {
+    if (!WIFI_LIST[i].ssid || !*WIFI_LIST[i].ssid) continue;
+    bool seen = false;
+    for (int k = 0; k < n && !seen; k++) seen = WiFi.SSID(k) == WIFI_LIST[i].ssid;
+    if (!seen) continue;
+    WiFi.scanDelete();
+    if (joinWifi(i, timeoutMs)) return true;
+    n = WiFi.scanNetworks();           // rescan before trying the next one
+  }
+  WiFi.scanDelete();
+  Serial.println("[wifi] none of the known networks are in range");
+  return false;
+}
+
+// Connected to a lower-priority network (say, the hotspot)? Every couple of minutes look
+// for a preferred one and move over to it.
+static void maybeUpgradeWifi() {
+  if (WiFi.status() != WL_CONNECTED || wifiIdx <= 0) return;
+  if (millis() - lastWifiUpgradeMs < 120000UL) return;
+  lastWifiUpgradeMs = millis();
+  int n = WiFi.scanNetworks();
+  int best = -1;
+  for (int i = 0; i < wifiIdx && best < 0; i++) {
+    if (!WIFI_LIST[i].ssid || !*WIFI_LIST[i].ssid) continue;
+    for (int k = 0; k < n; k++) {
+      if (WiFi.SSID(k) == WIFI_LIST[i].ssid && WiFi.RSSI(k) > -82) { best = i; break; }
+    }
+  }
+  WiFi.scanDelete();
+  if (best < 0) return;
+  Serial.printf("[wifi] preferred network '%s' is in range, switching\n", WIFI_LIST[best].ssid);
+  setFooter(String("Switching to ") + WIFI_LIST[best].ssid, false);
+  WiFi.disconnect();
+  delay(200);
+  if (!joinWifi(best, 12000)) tryWifi(8000);    // could not switch: fall back to whatever answers
+  else setFooter("Connected to " + WiFi.SSID(), false);
+  drawHeader();
 }
 
 static void ensureWifi() {
-  if (WiFi.status() == WL_CONNECTED) return;
+  if (WiFi.status() == WL_CONNECTED) { maybeUpgradeWifi(); return; }
   // Phone hotspots come and go (the phone sleeps, you walk away...), so keep looking.
   if (millis() - lastWifiTryMs > 15000) {
     setFooter("No Wi-Fi, looking for: " + wifiNames(), true);
@@ -2016,7 +2061,7 @@ void setup() {
   startWifi();
   unsigned long t0 = millis();
   bool connected = false;
-  while (!connected && millis() - t0 < 30000) connected = tryWifi(10000);
+  while (!connected && millis() - t0 < 45000) connected = tryWifi(10000);
   if (connected) {
     splash("Connected to " + WiFi.SSID(), WiFi.localIP().toString());
     configTzTime(TZ_INFO, "pool.ntp.org", "time.nist.gov", "time.google.com");

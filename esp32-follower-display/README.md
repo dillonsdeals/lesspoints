@@ -85,7 +85,8 @@ In `config.h` list the hotspot next to your home network:
   { "Dillon’s iPhone",  "hotspotpassword" }
 ```
 
-The display picks the strongest known network it can see. If the phone goes out of range, the footer
+The display joins the first network in the list it can see, so put home first. If it is on the
+hotspot when it gets home, it moves over to the home network within a couple of minutes. If the phone goes out of range, the footer
 shows *No Wi-Fi, looking for: ...* and it retries every 15 seconds, so when you come back (or open the
 Hotspot screen again) it reconnects by itself. It shows up in the hotspot's client list as
 `follower-display`.
