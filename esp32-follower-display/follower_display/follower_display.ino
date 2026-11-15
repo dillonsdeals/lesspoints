@@ -25,6 +25,7 @@
 #include <SPI.h>
 #include <TFT_eSPI.h>
 #include <XPT2046_Touchscreen.h>
+#include <TJpg_Decoder.h>
 #include <time.h>
 
 // Source identifiers (used by config.h, so they must come first)
@@ -144,7 +145,11 @@
 #ifndef PLANES_API_BASE
 #define PLANES_API_BASE "https://api.adsb.lol"
 #endif
+#ifndef PLANES_PHOTOS
+#define PLANES_PHOTOS 1             // fetch a photo of the actual aircraft from planespotters.net
+#endif
 #define PLANES_MAX 8
+#define PHOTO_MAX_BYTES 70000
 #ifndef ANIMATE_COUNT_UP
 #define ANIMATE_COUNT_UP 1          // numbers roll up when followers increase
 #endif
@@ -289,6 +294,7 @@ struct Money { float x, y, vx, vy; uint8_t kind; uint8_t size; };   // kind 0 = 
 
 // One aircraft from the ADS-B feed
 struct Plane {
+  char  hex[8];        // ICAO 24-bit address, identifies the airframe
   char  callsign[10];
   char  type[6];
   char  reg[10];
@@ -302,6 +308,7 @@ struct Plane {
   int   vrate;         // feet per minute
   float dist;          // nautical miles from home
   float dir;           // bearing from home, degrees
+  float elev;          // how far up to look, degrees above the horizon
   float lat, lon;
 };
 
@@ -322,12 +329,12 @@ static void drawTotal(long showTotal = -2, bool hideDelta = false);
 static void drawZoomValue(long showValue = -2, bool hideDelta = false);
 static void drawFullscreen(long showValue = -2, bool hideDelta = false);
 static void drawMoney(TFT_eSPI& g, const Money& m);
-static void drawPlanesDash();
-static void drawStat(TFT_eSPI& g, int x, int y, const char* label, const String& value, uint16_t col = C_TEXT);
-static void drawRadar();
-static void drawPlaneZoom();
+static void drawOverhead();
+static void drawPhoto();
+static void fetchPhoto();
 static void fetchPlanes();
 static void setMode(Mode m);
+static void clearScreen();
 
 Platform ig = {"Instagram", INSTAGRAM_USERNAME, INSTAGRAM_SOURCE, fetchInstagramApi, scrapeInstagram,
                "instagram", "ig_last", C_IG, C_IG2, -1, -1, 0, false, ""};
@@ -354,14 +361,18 @@ static Mode   mode = MODE_FOLLOWERS;
 static Plane  planes[PLANES_MAX];
 static int    planeCount = 0;
 static int    planesTotal = 0;          // everything the feed saw in range
-static int    zoomPlane = -1;           // -1 = radar screen, otherwise index into planes[]
-static unsigned long lastPlanesMs = 0, nextPlanesMs = 0, lastRadarMs = 0;
+static int    sel = 0;                  // which of planes[] is on screen
+static unsigned long lastPlanesMs = 0, nextPlanesMs = 0;
 static bool   planesEverFetched = false, forcePlanes = false;
 static String planesErr;
 static float  homeLat = HOME_LAT, homeLon = HOME_LON;
 static bool   homeKnown = (HOME_LAT != 0.0) || (HOME_LON != 0.0);
 static String homeName;
-static float  sweepDeg = 0;
+static uint8_t* photoBuf = nullptr;     // JPEG of the aircraft on screen
+static size_t   photoLen = 0;
+static char     photoHex[8] = "";       // airframe the buffer (or the failed lookup) belongs to
+static char     photoCredit[32] = "";
+static char     photoDrawnKey[20] = ""; // what the photo box currently shows
 
 // =====================================================================
 //  small helpers
@@ -723,8 +734,7 @@ static void drawHeader() {
   String titleS;
   uint16_t tcol = C_ACCENT_L;
   if (mode == MODE_PLANES) {
-    if (zoomPlane >= 0 && zoomPlane < planeCount) { titleS = planes[zoomPlane].callsign; tcol = C_GOOD; }
-    else { titleS = "RADAR"; if (homeName.length()) titleS += "  " + homeName; tcol = C_GOOD; }
+    titleS = "LOOK UP"; if (homeName.length()) titleS += "  " + homeName; tcol = C_GOOD;
     titleS.toUpperCase();
   } else {
     titleS = view == VIEW_IG ? "INSTAGRAM" : view == VIEW_TT ? "TIKTOK" :
@@ -762,8 +772,7 @@ static void drawFooter() {
     else {
       unsigned long ago = (millis() - lastPlanesMs) / 1000;
       msg = "Updated " + String(ago) + "s ago  |  " + String(planesTotal) + " aircraft in range";
-      if (zoomPlane >= 0) msg += "  |  tap to go back";
-      else msg += ((millis() / 6000) % 2) ? "  |  tap a plane for details" : "  |  tap title: followers";
+      msg += ((millis() / 6000) % 2) ? "  |  tap: next plane" : "  |  tap title: followers";
     }
   } else if (!msg.length()) {
     if (!everFetched) msg = "Waiting for first update...";
@@ -996,7 +1005,7 @@ static void drawFullscreen(long showValue, bool hideDelta) {
 static void drawAll() {
   drawHeader();
   if (mode == MODE_PLANES) {
-    if (zoomPlane >= 0 && zoomPlane < planeCount) drawPlaneZoom(); else drawPlanesDash();
+    drawOverhead();
     drawFooter();
     return;
   }
@@ -1010,19 +1019,23 @@ static void drawAll() {
   drawFooter();
 }
 
+static void clearScreen() {
+  tft.fillScreen(C_BG);
+  photoDrawnKey[0] = 0;          // the photo box was wiped too
+}
+
 static void setView(View v) {
   view = v;
-  tft.fillScreen(C_BG);
+  clearScreen();
   drawAll();
 }
 
 static void setMode(Mode m) {
   mode = m;
   view = VIEW_DASH;
-  zoomPlane = -1;
   prefs.putUChar("mode", (uint8_t)m);
   if (m == MODE_PLANES && !planesEverFetched) forcePlanes = true;
-  tft.fillScreen(C_BG);
+  clearScreen();
   drawAll();
 }
 
@@ -1209,7 +1222,7 @@ static void celebrate(const char* who, long value) {
   if (useSpr) spr.deleteSprite();
   spr.setColorDepth(16);
   setLed(false, false, false);
-  tft.fillScreen(C_BG);
+  clearScreen();
   drawAll();
 }
 
@@ -1397,7 +1410,7 @@ static void fetchPlanes() {
   // Only keep the fields we show, so a busy sky fits in memory.
   JsonDocument filter;
   filter["total"] = true;
-  static const char* keys[] = {"flight", "t", "r", "alt_baro", "gs", "track", "lat", "lon", "dst", "dir", "baro_rate", "ownOp"};
+  static const char* keys[] = {"hex", "flight", "t", "r", "alt_baro", "gs", "track", "lat", "lon", "dst", "dir", "baro_rate", "ownOp"};
   for (const char* k : keys) filter["ac"][0][k] = true;
   JsonDocument doc;
   DeserializationError e = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
@@ -1411,13 +1424,18 @@ static void fetchPlanes() {
   for (JsonObject ac : doc["ac"].as<JsonArray>()) {
     if (!ac["dst"].is<float>() || !ac["lat"].is<float>()) continue;
     float d = ac["dst"];
+    // "overhead" = the steepest angle up from where you stand
+    float altFt = ac["alt_baro"].is<long>() ? (float)ac["alt_baro"].as<long>() : 0.0f;
+    float elev = altFt > 0 ? atan2f(altFt * 0.3048f, d * 1852.0f) * RAD_TO_DEG : -1.0f;
     int pos = n;
-    while (pos > 0 && tmp[pos - 1].dist > d) pos--;
+    while (pos > 0 && tmp[pos - 1].elev < elev) pos--;
     if (pos >= PLANES_MAX) continue;
     if (n < PLANES_MAX) n++;
     for (int k = n - 1; k > pos; k--) tmp[k] = tmp[k - 1];
     Plane& p = tmp[pos];
     memset(&p, 0, sizeof p);
+    p.elev = elev;
+    strlcpy(p.hex, ac["hex"] | "", sizeof p.hex);
     strlcpy(p.callsign, ac["flight"] | "", sizeof p.callsign);
     for (int k = strlen(p.callsign) - 1; k >= 0 && p.callsign[k] == ' '; k--) p.callsign[k] = 0;
     strlcpy(p.type, ac["t"] | "", sizeof p.type);
@@ -1432,15 +1450,13 @@ static void fetchPlanes() {
     p.dir = ac["dir"] | 0.0f;
     p.lat = ac["lat"]; p.lon = ac["lon"];
   }
-  // keep the zoomed plane in view if it is still around
-  char keep[10] = "";
-  if (zoomPlane >= 0 && zoomPlane < planeCount) strlcpy(keep, planes[zoomPlane].callsign, sizeof keep);
+  // stay on the plane you were looking at if it is still around, otherwise the most overhead one
+  char keep[8] = "";
+  if (sel > 0 && sel < planeCount) strlcpy(keep, planes[sel].hex, sizeof keep);
   memcpy(planes, tmp, sizeof planes);
   planeCount = n;
-  if (keep[0]) {
-    zoomPlane = -1;
-    for (int i = 0; i < planeCount; i++) if (!strcmp(planes[i].callsign, keep)) zoomPlane = i;
-  }
+  sel = 0;
+  for (int i = 0; keep[0] && i < planeCount; i++) if (!strcmp(planes[i].hex, keep)) sel = i;
 #if PLANES_ROUTES
   if (planeCount) lookupRoutes();
 #endif
@@ -1448,170 +1464,233 @@ static void fetchPlanes() {
   planesEverFetched = true;
   lastPlanesMs = millis();
   nextPlanesMs = lastPlanesMs + (unsigned long)PLANES_REFRESH_SEC * 1000UL;
-  Serial.printf("[planes] %d in range, nearest %s %s (free heap %u)\n", planesTotal,
-                planeCount ? planes[0].callsign : "-", planeCount ? distStr(planes[0].dist).c_str() : "", ESP.getFreeHeap());
+  Serial.printf("[planes] %d in range, most overhead %s at %s, %.0f deg up (free heap %u)\n", planesTotal,
+                planeCount ? planes[0].callsign : "-", planeCount ? distStr(planes[0].dist).c_str() : "",
+                planeCount ? planes[0].elev : 0.0f, ESP.getFreeHeap());
 }
 
-// ---- radar screen: scope on the left, nearest aircraft on the right ----
-#define RADAR_W   192
-#define RADAR_Y   (HDR_H)
-#define RADAR_H   (FOOT_Y - HDR_H)
-#define RADAR_CX  96
-#define RADAR_CY  (RADAR_H / 2)
-#define RADAR_R   84
-#define LIST_X    196
-#define LIST_W    (SCR_W - LIST_X - 2)
-#define LIST_ROW  36
-#define LIST_ROWS 5
+// ---- "Look up" screen: photo of the aircraft overhead, where to look, flight details ----
+#define PH_X   8
+#define PH_Y   30
+#define PH_W   200
+#define PH_H   133
+#define RC_X   212                 // right column
+#define RC_W   (SCR_W - RC_X)
+#define BAND_Y (PH_Y + PH_H + 6)   // bottom band with the flight details
+#define BAND_H (FOOT_Y - BAND_Y)
 
-static void drawRadar() {
-  Canvas c(0, RADAR_Y, RADAR_W, RADAR_H, 8);
-  TFT_eSPI& g = *c.g;
-  int ox = c.ox, oy = c.oy, cx = ox + RADAR_CX, cy = oy + RADAR_CY;
-  g.fillRect(ox, oy, RADAR_W, RADAR_H, C_BG);
-  g.fillCircle(cx, cy, RADAR_R, C_INSET);
-  for (int k = 1; k <= 3; k++) g.drawCircle(cx, cy, RADAR_R * k / 3, C_GOLD_D);
-  g.drawFastHLine(cx - RADAR_R, cy, 2 * RADAR_R, C_GOLD_D);
-  g.drawFastVLine(cx, cy - RADAR_R, 2 * RADAR_R, C_GOLD_D);
-  // sweep with a short trail
-  for (int t = 0; t < 4; t++) {
-    float a = (sweepDeg - t * 7) * DEG_TO_RAD;
-    uint16_t col = t == 0 ? C_GOOD : t == 1 ? 0x2D08 : 0x1C66;
-    g.drawLine(cx, cy, cx + (int)(sinf(a) * RADAR_R), cy - (int)(cosf(a) * RADAR_R), col);
-  }
-  g.setTextFont(1);
-  g.setTextDatum(MC_DATUM);
-  g.setTextColor(C_GOLD, C_BG);
-  g.drawString("N", cx, oy + 6);
-  g.setTextDatum(BL_DATUM);
-  g.setTextColor(C_MUTED, C_BG);
-  g.drawString(distStr(PLANES_RADIUS_NM), ox + 4, oy + RADAR_H - 3);
-  g.setTextDatum(BR_DATUM);
-  g.drawString(String(planesTotal) + " in range", ox + RADAR_W - 4, oy + RADAR_H - 3);
-  // aircraft, nearest last so it draws on top
-  for (int i = planeCount - 1; i >= 0; i--) {
-    const Plane& p = planes[i];
-    float f = p.dist / PLANES_RADIUS_NM; if (f > 1) f = 1;
-    float a = p.dir * DEG_TO_RAD;
-    int px = cx + (int)(sinf(a) * RADAR_R * f), py = cy - (int)(cosf(a) * RADAR_R * f);
-    uint16_t col = (i == (zoomPlane >= 0 ? zoomPlane : 0)) ? C_GOLD_L : C_GOOD;
-    float h = p.track * DEG_TO_RAD;
-    g.drawLine(px, py, px + (int)(sinf(h) * 8), py - (int)(cosf(h) * 8), col);
-    g.fillCircle(px, py, 3, col);
-    if (i < 3) {
-      g.setTextDatum(ML_DATUM);
-      g.setTextColor(col, C_INSET);
-      g.drawString(p.callsign, px + 6, py - 6);
+// TJpg_Decoder hands us decoded blocks; push them to the panel.
+static bool jpgOut(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+  if (y >= PH_Y + PH_H) return false;
+  tft.pushImage(x, y, w, h, bitmap);
+  return true;
+}
+
+// Fallback when there is no photo: a top-down airliner outline.
+static void drawPlaneSilhouette(int cx, int cy, uint16_t col) {
+  tft.fillRoundRect(cx - 6, cy - 50, 12, 100, 6, col);
+  tft.fillTriangle(cx - 6, cy - 8, cx - 72, cy + 24, cx - 6, cy + 16, col);
+  tft.fillTriangle(cx + 6, cy - 8, cx + 72, cy + 24, cx + 6, cy + 16, col);
+  tft.fillTriangle(cx - 6, cy + 36, cx - 30, cy + 52, cx - 6, cy + 50, col);
+  tft.fillTriangle(cx + 6, cy + 36, cx + 30, cy + 52, cx + 6, cy + 50, col);
+  tft.fillCircle(cx, cy - 50, 6, col);
+}
+
+// The photo box. Only repaints when what it should show has changed.
+static void drawPhoto() {
+  if (mode != MODE_PLANES || !planeCount) return;
+  const Plane& p = planes[sel];
+  bool tried = !strcmp(photoHex, p.hex);
+  bool have  = tried && photoLen > 0;
+  char key[20];
+  snprintf(key, sizeof key, "%s:%d%d", p.hex, tried, have);
+  if (!strcmp(key, photoDrawnKey)) return;
+  strlcpy(photoDrawnKey, key, sizeof photoDrawnKey);
+
+  tft.fillRoundRect(PH_X - 4, PH_Y - 4, PH_W + 8, PH_H + 8, 8, C_GOLD);
+  tft.fillRect(PH_X, PH_Y, PH_W, PH_H, C_INSET);
+  bool drawn = false;
+#if PLANES_PHOTOS
+  if (have) {
+    uint16_t w = 0, h = 0;
+    if (TJpgDec.getJpgSize(&w, &h, photoBuf, photoLen) == JDR_OK && w && h) {
+      int scale = 1;
+      while ((w / scale > PH_W || h / scale > PH_H) && scale < 8) scale *= 2;
+      if (w / scale <= PH_W && h / scale <= PH_H) {
+        TJpgDec.setJpgScale(scale);
+        TJpgDec.drawJpg(PH_X + (PH_W - w / scale) / 2, PH_Y + (PH_H - h / scale) / 2, photoBuf, photoLen);
+        drawn = true;
+      }
+    }
+    if (drawn && photoCredit[0]) {
+      tft.setTextFont(1);
+      tft.setTextDatum(BR_DATUM);
+      tft.setTextColor(C_TEXT, C_INSET);
+      String credit = String(" ") + photoCredit + " / planespotters.net ";
+      tft.drawString(credit, PH_X + PH_W - 1, PH_Y + PH_H - 2);
     }
   }
-  g.fillCircle(cx, cy, 3, C_GOLD_L);     // you
-  c.done();
+#endif
+  if (!drawn) {
+    drawPlaneSilhouette(PH_X + PH_W / 2, PH_Y + PH_H / 2 - 6, C_GOLD_D);
+    tft.setTextFont(2);
+    tft.setTextDatum(BC_DATUM);
+    tft.setTextColor(C_MUTED, C_INSET);
+    tft.drawString(tried ? "no photo of this aircraft" : "finding a photo...", PH_X + PH_W / 2, PH_Y + PH_H - 4);
+  }
 }
 
-static void drawPlaneList() {
-  Canvas c(LIST_X, RADAR_Y, LIST_W, RADAR_H);
-  TFT_eSPI& g = *c.g;
-  int ox = c.ox, oy = c.oy;
-  g.fillRect(ox, oy, LIST_W, RADAR_H, C_BG);
-  g.fillRoundRect(ox, oy + 2, LIST_W, RADAR_H - 4, 8, C_GOLD_D);
-  g.fillRoundRect(ox + 1, oy + 3, LIST_W - 2, RADAR_H - 6, 7, C_CARD);
+static void drawOverhead() {
   if (!planeCount) {
-    g.setTextFont(2);
+    Canvas c(0, ZOOM_Y, SCR_W, ZOOM_H, 8);
+    TFT_eSPI& g = *c.g;
+    g.fillRect(c.ox, c.oy, SCR_W, ZOOM_H, C_BG);
     g.setTextDatum(MC_DATUM);
-    g.setTextColor(C_MUTED, C_CARD);
-    g.drawString(planesEverFetched ? "No aircraft" : "Searching", ox + LIST_W / 2, oy + RADAR_H / 2 - 8);
-    g.drawString(planesEverFetched ? "nearby" : "the sky...", ox + LIST_W / 2, oy + RADAR_H / 2 + 8);
+    g.setFreeFont(FONT_B12);
+    g.setTextColor(C_GOLD_L, C_BG);
+    g.drawString(planesEverFetched ? "Nothing overhead right now" : "Scanning the sky...", c.ox + SCR_W / 2, c.oy + ZOOM_H / 2 - 22);
+    g.setTextFont(2);
+    g.setTextColor(C_MUTED, C_BG);
+    String where = "within " + distStr(PLANES_RADIUS_NM) + (homeName.length() ? " of " + homeName : String(""));
+    g.drawString(where, c.ox + SCR_W / 2, c.oy + ZOOM_H / 2 + 6);
+    g.drawString("checks every " + String(PLANES_REFRESH_SEC) + " seconds", c.ox + SCR_W / 2, c.oy + ZOOM_H / 2 + 26);
     c.done();
+    photoDrawnKey[0] = 0;
     return;
   }
-  for (int i = 0; i < planeCount && i < LIST_ROWS; i++) {
-    const Plane& p = planes[i];
-    int ry = oy + 6 + i * LIST_ROW;
-    if (i) g.drawFastHLine(ox + 8, ry - 2, LIST_W - 16, C_GOLD_D);
+  const Plane& p = planes[sel];
+
+  // right column: which way to look
+  {
+    Canvas c(RC_X, PH_Y - 4, RC_W, PH_H + 8);
+    TFT_eSPI& g = *c.g;
+    int ox = c.ox, oy = c.oy;
+    g.fillRect(ox, oy, RC_W, PH_H + 8, C_BG);
+    int cx = ox + RC_W / 2, cy = oy + 36, r = 30;
+    g.fillCircle(cx, cy, r, C_INSET);
+    g.drawCircle(cx, cy, r, C_GOLD_D);
+    g.setTextFont(1);
+    g.setTextDatum(MC_DATUM);
+    g.setTextColor(C_GOLD, C_INSET);
+    g.drawString("N", cx, cy - r + 6);
+    float a = p.dir * DEG_TO_RAD;
+    int tx = cx + (int)(sinf(a) * (r - 7)), ty = cy - (int)(cosf(a) * (r - 7));
+    int bx = cx - (int)(sinf(a) * 6),       by = cy + (int)(cosf(a) * 6);
+    int lx = bx + (int)(cosf(a) * 7),       ly = by + (int)(sinf(a) * 7);
+    int rx = bx - (int)(cosf(a) * 7),       ry = by - (int)(sinf(a) * 7);
+    g.fillTriangle(tx, ty, lx, ly, rx, ry, C_GOOD);
+    g.fillCircle(cx, cy, 3, C_GOLD_L);
+
     g.setFreeFont(FONT_B9);
-    g.setTextDatum(TL_DATUM);
-    g.setTextColor(i == 0 ? C_GOLD_L : C_TEXT, C_CARD);
-    g.drawString(p.callsign, ox + 8, ry + 3);
+    g.setTextDatum(TC_DATUM);
+    g.setTextColor(C_GOLD_L, C_BG);
+    g.drawString(String("LOOK ") + compass(p.dir), cx, cy + r + 8);
     g.setTextFont(2);
-    g.setTextDatum(TR_DATUM);
-    g.setTextColor(C_GOOD, C_CARD);
-    g.drawString(distStr(p.dist), ox + LIST_W - 8, ry + 2);
-    g.setTextDatum(TL_DATUM);
-    g.setTextColor(C_MUTED, C_CARD);
-    String l2 = p.type[0] ? p.type : "----";
-    l2 += "  ";
-    if (p.onGround) l2 += "ground"; else l2 += fmtNum(p.alt) + " ft";
-    g.drawString(l2, ox + 8, ry + 19);
+    g.setTextColor(C_TEXT, C_BG);
+    String up = "up " + String((int)(p.elev + 0.5f));
+    int uw = g.textWidth(up);
+    g.drawString(up, cx - 3, cy + r + 30);
+    g.drawCircle(cx - 3 + uw / 2 + 4, cy + r + 32, 2, C_TEXT);   // degree sign
+    g.setTextColor(C_MUTED, C_BG);
+    g.drawString(distStr(p.dist) + " away", cx, cy + r + 48);
+    g.drawString(altStr(p), cx, cy + r + 64);
+    c.done();
   }
-  c.done();
-}
 
-static void drawPlanesDash() {
-  drawRadar();
-  drawPlaneList();
-}
-
-static void drawStat(TFT_eSPI& g, int x, int y, const char* label, const String& value, uint16_t col) {
-  g.setTextFont(2);
-  g.setTextDatum(TL_DATUM);
-  g.setTextColor(C_MUTED, C_CARD);
-  g.drawString(label, x, y);
-  g.setFreeFont(FONT_B9);
-  g.setTextColor(col, C_CARD);
-  g.drawString(value, x, y + 17);
-}
-
-static void drawPlaneZoom() {
-  const Plane& p = planes[zoomPlane];
-  Canvas c(0, ZOOM_Y, SCR_W, ZOOM_H, 8);
-  TFT_eSPI& g = *c.g;
-  int ox = c.ox, oy = c.oy;
-  g.fillRect(ox, oy, SCR_W, ZOOM_H, C_BG);
-  g.fillRoundRect(ox + CARD_X1, oy + 2, SCR_W - 2 * CARD_X1, ZOOM_H - 4, 12, C_GOLD);
-  g.fillRoundRect(ox + CARD_X1 + 2, oy + 4, SCR_W - 2 * CARD_X1 - 4, ZOOM_H - 8, 11, C_CARD);
-  g.drawRoundRect(ox + CARD_X1 + 7, oy + 9, SCR_W - 2 * CARD_X1 - 14, ZOOM_H - 18, 8, C_GOLD_D);
-
-  int L = ox + CARD_X1 + 16, R = ox + SCR_W - CARD_X1 - 16;
-  g.setTextFont(2);
-  g.setTextDatum(TL_DATUM);
-  g.setTextColor(C_MUTED, C_CARD);
-  String who = p.op[0] ? String(p.op) : String("Aircraft");
-  while (g.textWidth(who) > 190 && who.length() > 3) who.remove(who.length() - 1);
-  g.drawString(who, L, oy + 14);
-  g.setTextDatum(TR_DATUM);
-  String tr = p.type;
-  if (p.reg[0]) { if (tr.length()) tr += "  "; tr += p.reg; }
-  g.drawString(tr, R, oy + 14);
-
-  g.setTextDatum(MC_DATUM);
-  if (p.route[0]) {
-    g.setFreeFont(FONT_B18);
-    g.setTextColor(C_GOLD_L, C_CARD);
-    g.drawString(p.route, ox + SCR_W / 2, oy + 50);
+  // bottom band: who and where to
+  {
+    Canvas c(0, BAND_Y, SCR_W, BAND_H);
+    TFT_eSPI& g = *c.g;
+    int ox = c.ox, oy = c.oy;
+    g.fillRect(ox, oy, SCR_W, BAND_H, C_BG);
+    g.setFreeFont(FONT_B12);
+    g.setTextDatum(TL_DATUM);
+    g.setTextColor(C_TEXT, C_BG);
+    g.drawString(p.callsign, ox + PH_X, oy + 2);
+    int cw = g.textWidth(p.callsign);
     g.setTextFont(2);
-    g.setTextColor(C_MUTED, C_CARD);
-    String names = p.routeNames;
-    while (g.textWidth(names) > SCR_W - 60 && names.length() > 3) names.remove(names.length() - 1);
-    g.drawString(names, ox + SCR_W / 2, oy + 74);
+    g.setTextColor(C_MUTED, C_BG);
+    String who = p.op[0] ? String(p.op) : (p.type[0] ? String(p.type) : String("unknown operator"));
+    while (g.textWidth(who) > SCR_W - PH_X * 2 - cw - 12 && who.length() > 3) who.remove(who.length() - 1);
+    g.drawString(who, ox + PH_X + cw + 10, oy + 6);
+
+    int y2 = oy + 26;
+    int x = ox + PH_X;
+    if (p.route[0]) {
+      g.setTextColor(C_GOLD_L, C_BG);
+      g.drawString(p.route, x, y2);
+      x += g.textWidth(p.route) + 10;
+    }
+    g.setTextColor(C_MUTED, C_BG);
+    String rest;
+    if (p.route[0] && p.routeNames[0]) rest = p.routeNames;
+    else rest = String(p.type[0] ? p.type : "") + "  " + speedStr(p.gs) + "  heading " + compass(p.track);
+    while (g.textWidth(rest) > SCR_W - PH_X - x + ox && rest.length() > 3) rest.remove(rest.length() - 1);
+    g.drawString(rest, x, y2);
+    c.done();
+  }
+  drawPhoto();
+}
+
+#if PLANES_PHOTOS
+// Look up a photo of this exact airframe on planespotters.net and download it.
+static void fetchPhoto() {
+  if (mode != MODE_PLANES || !planeCount) return;
+  const Plane& p = planes[sel];
+  if (!p.hex[0] || !strcmp(photoHex, p.hex)) return;     // already have it, or already tried
+  strlcpy(photoHex, p.hex, sizeof photoHex);
+  photoLen = 0;
+  photoCredit[0] = 0;
+  photoDrawnKey[0] = 0;
+  setLed(false, false, true);
+
+  String body, err;
+  int code = httpRequest(String("https://api.planespotters.net/pub/photos/hex/") + p.hex, false, "", nullptr, nullptr, body);
+  JsonDocument doc;
+  if (code != 200 || !parseJson(body, doc, err)) {
+    Serial.printf("[photo] lookup failed (%d) %s\n", code, err.c_str());
+    setLed(false, false, false);
+    return;
+  }
+  const char* src = doc["photos"][0]["thumbnail_large"]["src"] | (const char*)nullptr;
+  if (!src) { Serial.printf("[photo] no photo for %s\n", p.hex); setLed(false, false, false); return; }
+  strlcpy(photoCredit, doc["photos"][0]["photographer"] | "", sizeof photoCredit);
+  String url = src;
+
+  WiFiClientSecure client; client.setInsecure();
+  HTTPClient http;
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setUserAgent("ESP32-FollowerDisplay/1.0");
+  if (!http.begin(client, url)) { setLed(false, false, false); return; }
+  code = http.GET();
+  int len = http.getSize();
+  if (code != 200 || len <= 0 || len > PHOTO_MAX_BYTES) {
+    Serial.printf("[photo] download %d, %d bytes\n", code, len);
+    http.end(); setLed(false, false, false);
+    return;
+  }
+  if (!photoBuf) photoBuf = (uint8_t*)malloc(PHOTO_MAX_BYTES);
+  if (!photoBuf) { Serial.println("[photo] no memory"); http.end(); setLed(false, false, false); return; }
+  WiFiClient* st = http.getStreamPtr();
+  size_t got = 0;
+  unsigned long t0 = millis();
+  while (got < (size_t)len && millis() - t0 < 20000) {
+    if (st->available()) got += st->read(photoBuf + got, len - got);
+    else if (!st->connected()) break;
+    else delay(5);
+  }
+  http.end();
+  setLed(false, false, false);
+  if (got == (size_t)len) {
+    photoLen = got;
+    Serial.printf("[photo] %s: %u bytes by %s\n", p.hex, (unsigned)got, photoCredit);
   } else {
-    g.setFreeFont(FONT_B18);
-    g.setTextColor(C_GOLD_L, C_CARD);
-    g.drawString(p.callsign, ox + SCR_W / 2, oy + 50);
-    g.setTextFont(2);
-    g.setTextColor(C_MUTED, C_CARD);
-    g.drawString("route unknown", ox + SCR_W / 2, oy + 74);
+    Serial.printf("[photo] short read %u/%d\n", (unsigned)got, len);
   }
-
-  int colW = (R - L) / 3, y1 = oy + 94, y2 = oy + 138;
-  String altv = altStr(p);
-  uint16_t altc = p.vrate > 300 ? C_GOOD : p.vrate < -300 ? C_WARN : C_TEXT;
-  drawStat(g, L, y1, p.vrate > 300 ? "ALTITUDE  climbing" : p.vrate < -300 ? "ALTITUDE  descending" : "ALTITUDE", altv, altc);
-  drawStat(g, L + colW * 2, y1, "SPEED", speedStr(p.gs));
-  drawStat(g, L, y2, "DISTANCE", distStr(p.dist) + " " + compass(p.dir));
-  drawStat(g, L + colW, y2, "HEADING", String((int)p.track) + " " + compass(p.track));
-  drawStat(g, L + colW * 2, y2, "CALLSIGN", p.callsign);
-  c.done();
 }
+#else
+static void fetchPhoto() {}
+#endif
 
 // =====================================================================
 //  Wi-Fi
@@ -1675,6 +1754,8 @@ void setup() {
   tft.init();
   tft.setRotation(SCREEN_ROTATION);
   tft.fillScreen(C_BG);
+  TJpgDec.setSwapBytes(true);
+  TJpgDec.setCallback(jpgOut);
 
   touchSPI.begin(XPT_CLK, XPT_MISO, XPT_MOSI, XPT_CS);
   touch.begin(touchSPI);
@@ -1715,14 +1796,13 @@ static void handleTap(int x, int y) {
 #if PLANES_ENABLED
   if (y < HDR_H) { setMode(mode == MODE_PLANES ? MODE_FOLLOWERS : MODE_PLANES); return; }
   if (mode == MODE_PLANES) {
-    if (zoomPlane >= 0) { zoomPlane = -1; tft.fillScreen(C_BG); drawAll(); return; }
     if (y >= FOOT_Y) { forcePlanes = true; return; }
-    if (x >= LIST_X) {
-      int row = (y - RADAR_Y - 6) / LIST_ROW;
-      if (row >= 0 && row < planeCount && row < LIST_ROWS) { zoomPlane = row; tft.fillScreen(C_BG); drawAll(); }
-      return;
+    if (planeCount > 1) {                     // next plane
+      sel = (sel + 1) % planeCount;
+      drawAll();
+      fetchPhoto();
+      drawPhoto();
     }
-    if (planeCount) { zoomPlane = 0; tft.fillScreen(C_BG); drawAll(); }
     return;
   }
 #endif
@@ -1762,11 +1842,8 @@ void loop() {
     fetchPlanes();
     if (planesErr.length()) nextPlanesMs = millis() + 20000;
     drawAll();
-  }
-  if (mode == MODE_PLANES && zoomPlane < 0 && millis() - lastRadarMs >= 150) {
-    lastRadarMs = millis();
-    sweepDeg += 9; if (sweepDeg >= 360) sweepDeg -= 360;
-    drawRadar();
+    fetchPhoto();
+    drawPhoto();
   }
 #endif
 

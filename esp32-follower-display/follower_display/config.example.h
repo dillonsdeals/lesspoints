@@ -48,7 +48,8 @@
 #define PLANES_RADIUS_NM    25      // how far to look, in nautical miles (25 nm = about 29 miles)
 #define PLANES_REFRESH_SEC  15
 #define PLANES_UNITS_MILES  1       // 1 = miles / mph, 0 = nautical miles / knots
-#define PLANES_ROUTES       1       // show where the nearest flights are going
+#define PLANES_ROUTES       1       // show where the flight is going
+#define PLANES_PHOTOS       1       // show a photo of the actual aircraft (planespotters.net)
 
 // ---------------- Fun ----------------
 #define ANIMATE_COUNT_UP      1   // numbers roll up when you gain followers
