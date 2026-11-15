@@ -31,7 +31,9 @@
 #define TZ_INFO "EST5EDT,M3.2.0,M11.1.0"
 
 // ---------------- Look ----------------
-#define THEME 1                   // 1 = sage green, 0 = classic dark
+#define THEME 1                   // 1 = money (dollar green + gold), 0 = classic dark
+#define DISPLAY_TITLE "DILLON'S DEALS"   // header text on the dashboard
+#define ZOOM_LCD_DIGITS 1         // cash-register digits when a panel is zoomed (0 = serif numerals)
 // Touch calibration: only change if taps land in the wrong place (raw 0..4095 -> pixels)
 // #define TOUCH_MIN_X 200
 // #define TOUCH_MAX_X 3700

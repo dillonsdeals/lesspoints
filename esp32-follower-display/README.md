@@ -205,7 +205,10 @@ Both can be switched off in `config.h` (`ANIMATE_COUNT_UP`, `CELEBRATE_MILESTONE
 * **Tap a card** (Instagram or TikTok) or the **total** to blow it up full screen with a big number.
   Tap anywhere to go back to the dashboard.
 * **Tap the header or footer** on the dashboard to refresh immediately.
-* The look is sage green by default; set `THEME 0` in `config.h` for the classic dark look.
+* The look is a "money" theme by default: dollar-bill green and gold, banknote-style cards with serif
+  numerals, ticker arrows for changes, a gold balance panel for the total, cash-register digits when
+  zoomed, and money rain for milestones. `DISPLAY_TITLE` sets the header text, `ZOOM_LCD_DIGITS 0`
+  swaps the register digits for serif numerals, and `THEME 0` gives the classic dark look.
 * The header dot is green when Wi-Fi is up and red when it is not.
 * If a fetch fails, the card keeps showing the last good number with *update failed* under it and the
   footer shows the reason. Open the serial monitor at 115200 baud for details.

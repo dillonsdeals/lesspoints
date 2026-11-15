@@ -98,7 +98,13 @@
 #define WIFI_PASSWORD ""
 #endif
 #ifndef THEME
-#define THEME 1                     // 1 = sage green, 0 = classic dark
+#define THEME 1                     // 1 = money (deals), 0 = classic dark
+#endif
+#ifndef DISPLAY_TITLE
+#define DISPLAY_TITLE "DILLON'S DEALS"   // header text on the dashboard
+#endif
+#ifndef ZOOM_LCD_DIGITS
+#define ZOOM_LCD_DIGITS 1           // cash-register style digits in the zoomed views
 #endif
 // Raw touch range -> pixels. Adjust in config.h if taps land in the wrong place.
 #ifndef TOUCH_MIN_X
@@ -154,29 +160,43 @@
 
 // ---------- colours (RGB565) ----------
 #if THEME == 1
-// Sage green: deep forest background, moss cards, a sage panel for the total.
-#define C_BG          0x1924   // #1B2520 deep forest
-#define C_CARD        0x29C6   // #2A3A30 moss card
-#define C_TOTAL       0x9D71   // #9CAF88 sage panel
-#define C_TOTAL_TEXT  0x1924   // dark text on the sage panel
-#define C_TOTAL_MUTED 0x3A67
-#define C_TOTAL_GOOD  0x2AC5   // deep green
-#define C_TOTAL_BAD   0x89C5   // brick
-#define C_TEXT        0xF79C   // #F3F1E7 cream
-#define C_MUTED       0xA5B3   // #A3B59B sage grey
-#define C_ACCENT      0x9D71   // sage
-#define C_ACCENT_L    0xCEB7   // #C8D6BC pale sage
-#define C_IG          0xDD35   // #D9A5AC dusty rose
-#define C_IG2         0xEE14   // #EAC3A3 peach
-#define C_TT          0x8E58   // #8FCBC2 soft teal
-#define C_TT2         0xE534   // #E3A7A7 blush
-#define C_GOOD        0xAEF3   // #A9DD9A light green
-#define C_BAD         0xE4D1   // #E09A8A soft red
-#define C_WARN        0xE651   // #E6C98A sand
+// Money: dollar-bill greens, gold, cream. Punchy enough to read on a cheap TFT.
+#define C_BG          0x0964   // #0B2E22 deep dollar green
+#define C_CARD        0x12E8   // #155D43 banknote green
+#define C_INSET       0x0103   // #06231A register display
+#define C_INSET_GHOST 0x1A66   // unlit LCD segments
+#define C_GOLD        0xD566   // #D4AF37
+#define C_GOLD_L      0xF68D   // #F2D06B
+#define C_GOLD_D      0x8B84   // #8C7326 engraving line
+#define C_TOTAL       0xE588   // #E3B341 gold balance panel
+#define C_TOTAL_TEXT  0x0964
+#define C_TOTAL_MUTED 0x5A22
+#define C_TOTAL_GOOD  0x0AC5   // deep green
+#define C_TOTAL_BAD   0x88C3   // brick
+#define C_TEXT        0xF79B   // #F6F1DE cream
+#define C_MUTED       0x9E56   // #9CC9B0 pale mint
+#define C_ACCENT      C_GOLD
+#define C_ACCENT_L    C_GOLD_L
+#define C_IG          0xE1AD   // Instagram pink (brand tab only)
+#define C_IG2         0xFC40   // Instagram orange
+#define C_TT          0x6E5A   // TikTok cyan
+#define C_TT2         0xE8EA   // TikTok red
+#define C_GOOD        0x3EF0   // #3DDC84 mint "up"
+#define C_BAD         0xFB4B   // #FF6B5B "down"
+#define C_WARN        0xF68D
+#define FONT_B9       (&FreeSerifBold9pt7b)
+#define FONT_B12      (&FreeSerifBold12pt7b)
+#define FONT_B18      (&FreeSerifBold18pt7b)
+#define FONT_B24      (&FreeSerifBold24pt7b)
 #else
 // Classic dark
 #define C_BG          0x10A3
 #define C_CARD        0x2124
+#define C_INSET       0x0000
+#define C_INSET_GHOST 0x18E3
+#define C_GOLD        0x7BFF
+#define C_GOLD_L      TFT_YELLOW
+#define C_GOLD_D      0x4A69
 #define C_TOTAL       0x1926
 #define C_TOTAL_TEXT  TFT_WHITE
 #define C_TOTAL_MUTED 0x8C71
@@ -193,6 +213,10 @@
 #define C_GOOD        0x2E8E
 #define C_BAD         0xE945
 #define C_WARN        0xFD20
+#define FONT_B9       (&FreeSansBold9pt7b)
+#define FONT_B12      (&FreeSansBold12pt7b)
+#define FONT_B18      (&FreeSansBold18pt7b)
+#define FONT_B24      (&FreeSansBold24pt7b)
 #endif
 
 // ---------- globals ----------
@@ -587,7 +611,7 @@ static bool fetchBridge(JsonDocument& doc, String& err) {
 // =====================================================================
 // Pick the largest bold font that fits `text` into `maxW` pixels.
 static const GFXfont* fitFont(TFT_eSPI& g, const String& text, int maxW) {
-  static const GFXfont* fonts[] = {&FreeSansBold24pt7b, &FreeSansBold18pt7b, &FreeSansBold12pt7b, &FreeSansBold9pt7b};
+  static const GFXfont* fonts[] = {FONT_B24, FONT_B18, FONT_B12, FONT_B9};
   for (const GFXfont* f : fonts) {
     g.setFreeFont(f);
     if (g.textWidth(text) <= maxW) return f;
@@ -619,11 +643,11 @@ static void drawHeader() {
   TFT_eSPI& g = *c.g;
   g.fillRect(c.ox, c.oy, SCR_W, HDR_H, C_BG);
   const char* title = view == VIEW_IG ? "INSTAGRAM" : view == VIEW_TT ? "TIKTOK" :
-                      view == VIEW_TOTAL ? "TOTAL FOLLOWERS" : "LIVE FOLLOWERS";
+                      view == VIEW_TOTAL ? "TOTAL BALANCE" : DISPLAY_TITLE;
   uint16_t tcol = view == VIEW_IG ? C_IG : view == VIEW_TT ? C_TT : C_ACCENT_L;
   g.setTextColor(tcol, C_BG);
   g.setTextDatum(ML_DATUM);
-  g.setFreeFont(&FreeSansBold9pt7b);
+  g.setFreeFont(FONT_B9);
   g.drawString(title, c.ox + 6, c.oy + HDR_H / 2);
   g.setTextFont(2);
   g.setTextDatum(MR_DATUM);
@@ -661,12 +685,30 @@ static void drawFooter() {
   c.done();
 }
 
+// Stock-ticker style change: a little triangle plus the number. anchor: 'L', 'C' or 'R'.
+static void drawTicker(TFT_eSPI& g, int x, int cy, long delta, uint16_t good, uint16_t bad, uint16_t bg,
+                       char anchor = 'C', const char* suffix = "") {
+  if (delta == 0) return;
+  g.setTextFont(2);
+  String t = fmtNum(labs(delta)) + suffix;
+  int w = g.textWidth(t) + 14;
+  if (anchor == 'C') x -= w / 2; else if (anchor == 'R') x -= w;
+  uint16_t col = delta > 0 ? good : bad;
+  if (delta > 0) g.fillTriangle(x, cy + 4, x + 10, cy + 4, x + 5, cy - 4, col);
+  else           g.fillTriangle(x, cy - 4, x + 10, cy - 4, x + 5, cy + 4, col);
+  g.setTextDatum(ML_DATUM);
+  g.setTextColor(col, bg);
+  g.drawString(t, x + 14, cy);
+}
+
+// A card drawn like a banknote: gold frame, engraved inner line, platform colour tab.
 static void drawCardInto(TFT_eSPI& g, int ox, int oy, const Platform& p, long showCount, bool hideDelta) {
   g.fillRect(ox, oy, CARD_W, CARD_H, C_BG);
-  g.fillRoundRect(ox, oy, CARD_W, CARD_H, 10, C_CARD);
-  g.fillRoundRect(ox, oy, CARD_W, 8, 4, p.accent);
-  g.fillRect(ox, oy + 4, CARD_W, 4, C_CARD);
-  g.fillRect(ox + CARD_W / 2, oy, CARD_W / 2, 4, p.accent2);
+  g.fillRoundRect(ox, oy, CARD_W, CARD_H, 9, C_GOLD);
+  g.fillRoundRect(ox + 2, oy + 2, CARD_W - 4, CARD_H - 4, 8, C_CARD);
+  g.drawRoundRect(ox + 6, oy + 6, CARD_W - 12, CARD_H - 12, 5, C_GOLD_D);
+  g.fillRoundRect(ox + CARD_W - 40, oy + 9, 28, 5, 2, p.accent);     // platform tab
+  g.fillRoundRect(ox + CARD_W - 26, oy + 9, 14, 5, 2, p.accent2);
 
   if (p.source == SOURCE_OFF) {
     g.setTextFont(2); g.setTextDatum(MC_DATUM); g.setTextColor(C_MUTED, C_CARD);
@@ -676,35 +718,29 @@ static void drawCardInto(TFT_eSPI& g, int ox, int oy, const Platform& p, long sh
   }
 
   g.setTextDatum(TL_DATUM);
-  g.setFreeFont(&FreeSansBold9pt7b);
-  g.setTextColor(p.accent, C_CARD);
-  g.drawString(p.name, ox + 10, oy + 14);
+  g.setFreeFont(FONT_B9);
+  g.setTextColor(C_GOLD, C_CARD);
+  g.drawString(p.name, ox + 12, oy + 14);
   g.setTextFont(2);
   g.setTextColor(C_MUTED, C_CARD);
   String handle = String("@") + p.user;
-  while (g.textWidth(handle) > CARD_W - 20 && handle.length() > 3) handle.remove(handle.length() - 1);
-  g.drawString(handle, ox + 10, oy + 32);
+  while (g.textWidth(handle) > CARD_W - 24 && handle.length() > 3) handle.remove(handle.length() - 1);
+  g.drawString(handle, ox + 12, oy + 32);
 
   long shown = (showCount == -2) ? p.count : showCount;
   String num = fmtNum(shown);
-  fitFont(g, num, CARD_W - 16);
+  fitFont(g, num, CARD_W - 24);
   g.setTextDatum(MC_DATUM);
   g.setTextColor(p.ok || shown >= 0 ? C_TEXT : C_MUTED, C_CARD);
-  g.drawString(num, ox + CARD_W / 2, oy + 66);
+  g.drawString(num, ox + CARD_W / 2, oy + 64);
 
-  g.setTextFont(2);
-  g.setTextDatum(BC_DATUM);
   if (!p.ok && p.err.length()) {
+    g.setTextFont(2);
+    g.setTextDatum(BC_DATUM);
     g.setTextColor(C_WARN, C_CARD);
-    g.drawString(p.count >= 0 ? "update failed (old value)" : "update failed", ox + CARD_W / 2, oy + CARD_H - 6);
-  } else if (hideDelta) {
-    // animating: the change pops in once the number has finished rolling
-  } else if (p.delta > 0) {
-    g.setTextColor(C_GOOD, C_CARD);
-    g.drawString("+" + fmtNum(p.delta), ox + CARD_W / 2, oy + CARD_H - 6);
-  } else if (p.delta < 0) {
-    g.setTextColor(C_BAD, C_CARD);
-    g.drawString("-" + fmtNum(-p.delta), ox + CARD_W / 2, oy + CARD_H - 6);
+    g.drawString(p.count >= 0 ? "update failed (old value)" : "update failed", ox + CARD_W / 2, oy + CARD_H - 8);
+  } else if (!hideDelta) {
+    drawTicker(g, ox + CARD_W / 2, oy + CARD_H - 16, p.delta, C_GOOD, C_BAD, C_CARD);
   }
 }
 
@@ -726,90 +762,135 @@ static void drawTotal(long showTotal = -2, bool hideDelta = false) {
   TFT_eSPI& g = *c.g;
   int ox = c.ox, oy = c.oy;
   g.fillRect(ox, oy, SCR_W, TOTAL_H, C_BG);
-  g.fillRoundRect(ox + CARD_X1, oy, SCR_W - 2 * CARD_X1, TOTAL_H, 10, C_TOTAL);
+  g.fillRoundRect(ox + CARD_X1, oy, SCR_W - 2 * CARD_X1, TOTAL_H, 10, C_GOLD_D);
+  g.fillRoundRect(ox + CARD_X1 + 2, oy + 2, SCR_W - 2 * CARD_X1 - 4, TOTAL_H - 4, 9, C_TOTAL);
+
+  // gold coin + label
+  int cx = ox + CARD_X1 + 20, cy = oy + 15;
+  g.fillCircle(cx, cy, 9, C_TOTAL_TEXT);
+  g.fillCircle(cx, cy, 7, C_GOLD_L);
   g.setTextFont(2);
-  g.setTextDatum(TL_DATUM);
+  g.setTextDatum(MC_DATUM);
+  g.setTextColor(C_TOTAL_TEXT, C_GOLD_L);
+  g.drawString("$", cx, cy + 1);
+  g.setTextDatum(ML_DATUM);
   g.setTextColor(C_TOTAL_MUTED, C_TOTAL);
-  g.drawString("TOTAL", ox + CARD_X1 + 10, oy + 6);
+  g.drawString("TOTAL BALANCE", cx + 15, cy);
+
   long total = (showTotal == -2) ? currentTotal() : showTotal;
   long delta = (ig.source != SOURCE_OFF ? ig.delta : 0) + (tt.source != SOURCE_OFF ? tt.delta : 0);
-  if (delta != 0 && !hideDelta) {
-    g.setTextDatum(TR_DATUM);
-    g.setTextColor(delta > 0 ? C_TOTAL_GOOD : C_TOTAL_BAD, C_TOTAL);
-    g.drawString((delta > 0 ? "+" : "-") + fmtNum(labs(delta)), ox + SCR_W - CARD_X1 - 10, oy + 6);
-  }
+  if (!hideDelta) drawTicker(g, ox + SCR_W - CARD_X1 - 12, cy, delta, C_TOTAL_GOOD, C_TOTAL_BAD, C_TOTAL, 'R');
+
   String num = fmtNum(total);
-  fitFont(g, num, SCR_W - 2 * CARD_X1 - 20);
+  fitFont(g, num, SCR_W - 2 * CARD_X1 - 24);
   g.setTextDatum(MC_DATUM);
   g.setTextColor(C_TOTAL_TEXT, C_TOTAL);
-  g.drawString(num, ox + SCR_W / 2, oy + TOTAL_H / 2 + 6);
+  g.drawString(num, ox + SCR_W / 2, oy + TOTAL_H / 2 + 9);
   c.done();
 }
 
-// Biggest number we can draw: the 75px built-in font for plain digits, then smaller ones.
-static void drawBigNumber(TFT_eSPI& g, long value, int cx, int cy, int maxW) {
-  g.setTextDatum(MC_DATUM);
-  if (value >= 0) {
-    String plain = String(value);
-#ifdef LOAD_FONT8
-    g.setTextFont(8);
-    if (g.textWidth(plain) <= maxW) { g.drawString(plain, cx, cy); return; }
-#endif
-#ifdef LOAD_FONT6
-    g.setTextFont(6);
-    if (g.textWidth(plain) <= maxW) { g.drawString(plain, cx, cy); return; }
-#endif
-  }
-  String num = fmtNum(value);
-  fitFont(g, num, maxW);
-  g.drawString(num, cx, cy);
-}
+// Zoomed view geometry
+#define ZOOM_Y      (HDR_H)
+#define ZOOM_H      (FOOT_Y - HDR_H)
+#define ZOOM_NUM_X  14
+#define ZOOM_NUM_W  (SCR_W - 28)
+#define ZOOM_NUM_Y  (ZOOM_Y + 38)
+#define ZOOM_NUM_H  82
+#define ZOOM_DLT_Y  (ZOOM_Y + ZOOM_H - 36)
+#define ZOOM_DLT_H  24
 
-// One panel blown up to fill the screen (between the header and the footer).
-static void drawFullscreen(long showValue = -2, bool hideDelta = false) {
-  const Platform* p = view == VIEW_IG ? &ig : view == VIEW_TT ? &tt : nullptr;
-  const int W = SCR_W, H = FOOT_Y - HDR_H;
-  Canvas c(0, HDR_H, W, H, 8);
-  TFT_eSPI& g = *c.g;
-  int ox = c.ox, oy = c.oy;
-  uint16_t accent = p ? p->accent : C_ACCENT, accent2 = p ? p->accent2 : C_ACCENT_L;
-  g.fillRect(ox, oy, W, H, C_BG);
-  g.fillRoundRect(ox + CARD_X1, oy + 2, W - 2 * CARD_X1, H - 4, 12, C_CARD);
-  g.fillRoundRect(ox + CARD_X1, oy + 2, W - 2 * CARD_X1, 8, 4, accent);
-  g.fillRect(ox + CARD_X1, oy + 6, W - 2 * CARD_X1, 4, C_CARD);
-  g.fillRect(ox + W / 2, oy + 2, W / 2 - CARD_X1, 4, accent2);
+static const Platform* zoomPlatform() { return view == VIEW_IG ? &ig : view == VIEW_TT ? &tt : nullptr; }
 
-  g.setTextFont(2);
-  g.setTextDatum(TC_DATUM);
-  g.setTextColor(C_MUTED, C_CARD);
+// The parts of the zoomed view that never change: banknote frame, subtitle, label.
+static void drawZoomFrame() {
+  const Platform* p = zoomPlatform();
+  uint16_t accent = p ? p->accent : C_GOLD, accent2 = p ? p->accent2 : C_GOLD_L;
+  tft.fillRoundRect(CARD_X1, ZOOM_Y + 2, SCR_W - 2 * CARD_X1, ZOOM_H - 4, 12, C_GOLD);
+  tft.fillRoundRect(CARD_X1 + 2, ZOOM_Y + 4, SCR_W - 2 * CARD_X1 - 4, ZOOM_H - 8, 11, C_CARD);
+  tft.drawRoundRect(CARD_X1 + 7, ZOOM_Y + 9, SCR_W - 2 * CARD_X1 - 14, ZOOM_H - 18, 8, C_GOLD_D);
+  tft.fillRoundRect(SCR_W - CARD_X1 - 48, ZOOM_Y + 12, 32, 5, 2, accent);
+  tft.fillRoundRect(SCR_W - CARD_X1 - 32, ZOOM_Y + 12, 16, 5, 2, accent2);
+
+  tft.setTextFont(2);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(C_MUTED, C_CARD);
   String sub = p ? String("@") + p->user
-                 : String("Instagram ") + fmtNum(ig.count) + "   +   TikTok " + fmtNum(tt.count);
-  g.drawString(sub, ox + W / 2, oy + 18);
+                 : String("Instagram ") + fmtNum(ig.count) + "  +  TikTok " + fmtNum(tt.count);
+  tft.drawString(sub, CARD_X1 + 14, ZOOM_Y + 14);
 
+  tft.setFreeFont(FONT_B9);
+  tft.setTextDatum(TC_DATUM);
+  tft.setTextColor(C_GOLD, C_CARD);
+  tft.drawString(p ? "FOLLOWERS" : "TOTAL FOLLOWERS", SCR_W / 2, ZOOM_NUM_Y + ZOOM_NUM_H + 2);
+}
+
+// The number (and the change line) of the zoomed view. Redrawn on every update / animation frame.
+static void drawZoomValue(long showValue = -2, bool hideDelta = false) {
+  const Platform* p = zoomPlatform();
   long value = (showValue != -2) ? showValue : (p ? p->count : currentTotal());
-  g.setTextColor(C_TEXT, C_CARD);
-  drawBigNumber(g, value, ox + W / 2, oy + H / 2 - 2, W - 44);
-
-  g.setFreeFont(&FreeSansBold9pt7b);
-  g.setTextDatum(TC_DATUM);
-  g.setTextColor(accent, C_CARD);
-  g.drawString("FOLLOWERS", ox + W / 2, oy + H / 2 + 38);
-
-  g.setTextFont(2);
-  g.setTextDatum(BC_DATUM);
-  long delta = p ? p->delta : (ig.source != SOURCE_OFF ? ig.delta : 0) + (tt.source != SOURCE_OFF ? tt.delta : 0);
-  bool failed = p && !p->ok && p->err.length();
-  if (failed) {
-    g.setTextColor(C_WARN, C_CARD);
-    g.drawString("update failed, showing the last value", ox + W / 2, oy + H - 10);
-  } else if (!hideDelta && delta != 0) {
-    g.setTextColor(delta > 0 ? C_GOOD : C_BAD, C_CARD);
-    g.drawString((delta > 0 ? "+" : "-") + fmtNum(labs(delta)) + " since last check", ox + W / 2, oy + H - 10);
-  } else if (!hideDelta && everFetched) {
-    g.setTextColor(C_MUTED, C_CARD);
-    g.drawString("no change since last check", ox + W / 2, oy + H - 10);
+  {
+    Canvas c(ZOOM_NUM_X, ZOOM_NUM_Y, ZOOM_NUM_W, ZOOM_NUM_H);
+    TFT_eSPI& g = *c.g;
+    int ox = c.ox, oy = c.oy;
+    g.fillRect(ox, oy, ZOOM_NUM_W, ZOOM_NUM_H, C_CARD);
+    bool drawn = false;
+#if ZOOM_LCD_DIGITS && defined(LOAD_FONT7)
+    if (value >= 0) {
+      // cash-register display: dark inset, unlit "8" segments, lit digits right-aligned
+      String digits = String(value);
+      g.setTextFont(7);
+      int dw = g.textWidth("8");
+      int maxDigits = (ZOOM_NUM_W - 24) / dw;
+      if ((int)digits.length() <= maxDigits) {
+        int nGhost = max(6, (int)digits.length());
+        if (nGhost > maxDigits) nGhost = maxDigits;
+        String ghost; for (int i = 0; i < nGhost; i++) ghost += '8';
+        int boxW = nGhost * dw + 24, boxX = ox + (ZOOM_NUM_W - boxW) / 2;
+        g.fillRoundRect(boxX, oy + 4, boxW, ZOOM_NUM_H - 8, 6, C_INSET);
+        g.drawRoundRect(boxX, oy + 4, boxW, ZOOM_NUM_H - 8, 6, C_GOLD_D);
+        g.setTextDatum(MR_DATUM);
+        g.setTextColor(C_INSET_GHOST, C_INSET);
+        g.drawString(ghost, boxX + boxW - 12, oy + ZOOM_NUM_H / 2);
+        g.setTextColor(C_GOLD_L, C_INSET);
+        g.drawString(digits, boxX + boxW - 12, oy + ZOOM_NUM_H / 2);
+        drawn = true;
+      }
+    }
+#endif
+    if (!drawn) {
+      String num = fmtNum(value);
+      fitFont(g, num, ZOOM_NUM_W - 8);
+      g.setTextDatum(MC_DATUM);
+      g.setTextColor(C_TEXT, C_CARD);
+      g.drawString(num, ox + ZOOM_NUM_W / 2, oy + ZOOM_NUM_H / 2);
+    }
+    c.done();
   }
-  c.done();
+  {
+    Canvas c(ZOOM_NUM_X, ZOOM_DLT_Y, ZOOM_NUM_W, ZOOM_DLT_H);
+    TFT_eSPI& g = *c.g;
+    int ox = c.ox, oy = c.oy;
+    g.fillRect(ox, oy, ZOOM_NUM_W, ZOOM_DLT_H, C_CARD);
+    long delta = p ? p->delta : (ig.source != SOURCE_OFF ? ig.delta : 0) + (tt.source != SOURCE_OFF ? tt.delta : 0);
+    bool failed = p && !p->ok && p->err.length();
+    g.setTextFont(2);
+    g.setTextDatum(MC_DATUM);
+    if (failed) {
+      g.setTextColor(C_WARN, C_CARD);
+      g.drawString("update failed, showing the last value", ox + ZOOM_NUM_W / 2, oy + ZOOM_DLT_H / 2);
+    } else if (!hideDelta && delta != 0) {
+      drawTicker(g, ox + ZOOM_NUM_W / 2, oy + ZOOM_DLT_H / 2, delta, C_GOOD, C_BAD, C_CARD, 'C', " since last check");
+    } else if (!hideDelta && everFetched) {
+      g.setTextColor(C_MUTED, C_CARD);
+      g.drawString("no change since last check", ox + ZOOM_NUM_W / 2, oy + ZOOM_DLT_H / 2);
+    }
+    c.done();
+  }
+}
+
+static void drawFullscreen(long showValue = -2, bool hideDelta = false) {
+  drawZoomFrame();
+  drawZoomValue(showValue, hideDelta);
 }
 
 static void drawAll() {
@@ -839,7 +920,7 @@ static void setFooter(const String& msg, bool isError) {
 static void splash(const String& line1, const String& line2) {
   tft.fillScreen(C_BG);
   tft.setTextDatum(MC_DATUM);
-  tft.setFreeFont(&FreeSansBold12pt7b);
+  tft.setFreeFont(FONT_B12);
   tft.setTextColor(C_TEXT, C_BG);
   tft.drawString(line1, SCR_W / 2, SCR_H / 2 - 16);
   tft.setTextFont(2);
@@ -872,30 +953,41 @@ static void animateCountUp() {
         if (ttUp) drawCard(CARD_X2, tt, ttV, f < frames);
         drawTotal(toV, f < frames);
         break;
-      case VIEW_IG:    if (igUp) drawFullscreen(igV, f < frames); break;
-      case VIEW_TT:    if (ttUp) drawFullscreen(ttV, f < frames); break;
-      case VIEW_TOTAL: drawFullscreen(toV, f < frames); break;
+      case VIEW_IG:    if (igUp) drawZoomValue(igV, f < frames); break;
+      case VIEW_TT:    if (ttUp) drawZoomValue(ttV, f < frames); break;
+      case VIEW_TOTAL: drawZoomValue(toV, f < frames); break;
     }
     delay(25);
   }
 #endif
 }
 
-static const uint16_t CONFETTI[] = {C_IG, C_IG2, C_TT, C_TT2, C_GOOD, C_ACCENT_L, TFT_WHITE, C_ACCENT, C_WARN};
+// Money rain pieces: gold coins and green bills.
+struct Money { float x, y, vx, vy; uint8_t kind; uint8_t size; };   // kind 0 = coin, 1 = bill
+static void drawMoney(TFT_eSPI& g, const Money& m) {
+  int x = (int)m.x, y = (int)m.y;
+  if (m.kind == 0) {
+    g.fillCircle(x, y, m.size, C_GOLD_D);
+    g.fillCircle(x, y, m.size - 1, C_GOLD_L);
+  } else {
+    int w = m.size * 3, h = m.size + 2;
+    g.fillRect(x, y, w, h, C_GOOD);
+    g.drawRect(x, y, w, h, C_TEXT);
+  }
+}
 
-// A one-second burst of confetti out of a card plus a big "+N". Plays for every gain, even +1.
+// A one-second burst of coins and bills out of a card plus a big "+N". Plays for every gain, even +1.
 static void miniCelebrate(int x, const Platform& p) {
 #if ANIMATE_COUNT_UP
   if (view != VIEW_DASH) {            // zoomed in: just pulse the LED
     for (int i = 0; i < 4; i++) { setLed(false, true, false); delay(100); setLed(false, false, false); delay(100); }
     return;
   }
-  struct Spark { float x, y, vx, vy; uint8_t size; uint16_t color; };
-  const int N = 28;
-  Spark sp[N];
+  const int N = 22;
+  Money m[N];
   for (int i = 0; i < N; i++) {
     float a = random(628) / 100.0f, v = 2.0f + random(30) / 10.0f;
-    sp[i] = { CARD_W / 2.0f, 66.0f, cosf(a) * v, sinf(a) * v - 2.0f, (uint8_t)(2 + random(3)), CONFETTI[random(9)] };
+    m[i] = { CARD_W / 2.0f, 64.0f, cosf(a) * v, sinf(a) * v - 2.5f, (uint8_t)(random(3) == 0), (uint8_t)(2 + random(2)) };
   }
   String plus = "+" + fmtNum(p.delta);
   const int frames = 32;
@@ -905,16 +997,17 @@ static void miniCelebrate(int x, const Platform& p) {
     TFT_eSPI& g = *c.g;
     drawCardInto(g, c.ox, c.oy, p, -2, true);
     for (int i = 0; i < N; i++) {
-      Spark& k = sp[i];
+      Money& k = m[i];
       k.x += k.vx; k.y += k.vy; k.vy += 0.25f;              // a little gravity
-      if (k.x >= 0 && k.x < CARD_W && k.y >= 0 && k.y < CARD_H)
-        g.fillRect(c.ox + (int)k.x, c.oy + (int)k.y, k.size, k.size, k.color);
+      if (k.x >= 4 && k.x < CARD_W - 8 && k.y >= 4 && k.y < CARD_H - 6) {
+        Money shifted = k; shifted.x += c.ox; shifted.y += c.oy;
+        drawMoney(g, shifted);
+      }
     }
-    // the "+N" grows in, then holds
     g.setTextDatum(MC_DATUM);
-    g.setFreeFont(f < 4 ? &FreeSansBold9pt7b : f < 8 ? &FreeSansBold12pt7b : &FreeSansBold18pt7b);
-    g.setTextColor(C_GOOD);
-    g.drawString(plus, c.ox + CARD_W / 2, c.oy + 66);
+    g.setFreeFont(f < 4 ? FONT_B9 : f < 8 ? FONT_B12 : FONT_B18);
+    g.setTextColor(C_GOLD_L);
+    g.drawString(plus, c.ox + CARD_W / 2, c.oy + 64);
     c.done();
     delay(30);
   }
@@ -942,26 +1035,25 @@ static long milestoneCrossed(long from, long to) {
 
 static void drawCelebrationText(TFT_eSPI& g, const String& who, const String& num) {
   g.setTextDatum(MC_DATUM);
-  g.setFreeFont(&FreeSansBold9pt7b);
-  g.setTextColor(C_ACCENT_L);                     // no background colour: text floats over the confetti
-  g.drawString("NEW MILESTONE", SCR_W / 2, 72);
+  g.setFreeFont(FONT_B12);
+  g.setTextColor(C_GOLD_L);                       // no background colour: text floats over the money
+  g.drawString("CHA-CHING!", SCR_W / 2, 62);
   fitFont(g, num, SCR_W - 20);
-  g.setTextColor(TFT_WHITE);
+  g.setTextColor(C_TEXT);
   g.drawString(num, SCR_W / 2, 118);
-  g.setFreeFont(&FreeSansBold12pt7b);
-  g.setTextColor(C_ACCENT);
-  g.drawString(who + " followers", SCR_W / 2, 162);
+  g.setFreeFont(FONT_B12);
+  g.setTextColor(C_GOOD);
+  g.drawString(who + " followers", SCR_W / 2, 166);
 }
 
-// Full-screen confetti for a few seconds. Tap to skip.
+// Full-screen money rain for a few seconds. Tap to skip.
 static void celebrate(const char* who, long value) {
   Serial.printf("[milestone] %s %ld\n", who, value);
-  struct Particle { int16_t x, y; int8_t vx; uint8_t vy, size; uint16_t color; };
-  const int N = 70;
-  Particle parts[N];
+  const int N = 48;
+  Money m[N];
   for (int i = 0; i < N; i++) {
-    parts[i] = { (int16_t)random(SCR_W), (int16_t)(-random(SCR_H)), (int8_t)random(-1, 2),
-                 (uint8_t)(2 + random(4)), (uint8_t)(3 + random(4)), CONFETTI[random(9)] };
+    m[i] = { (float)random(SCR_W), (float)-random(SCR_H), (random(3) - 1) * 0.5f, 1.5f + random(25) / 10.0f,
+             (uint8_t)(random(2)), (uint8_t)(3 + random(3)) };
   }
   String num = fmtNum(value);
   String who_s = who;
@@ -975,29 +1067,27 @@ static void celebrate(const char* who, long value) {
   unsigned long skipGuard = millis() + 400;        // ignore the tap that may have triggered the refresh
   uint8_t tick = 0;
   while (millis() < endAt) {
-    uint8_t phase = (tick++ >> 3) % 3;
-    setLed(phase == 0, phase == 1, phase == 2);
+    uint8_t phase = (tick++ >> 3) % 2;
+    setLed(phase == 1, true, false);               // green / amber shimmer
     if (useSpr) {
       spr.fillSprite(C_BG);
-      for (int i = 0; i < N; i++) spr.fillRect(parts[i].x, parts[i].y, parts[i].size, parts[i].size, parts[i].color);
+      for (int i = 0; i < N; i++) drawMoney(spr, m[i]);
       drawCelebrationText(spr, who_s, num);
       spr.pushSprite(0, 0);
     } else {
       for (int i = 0; i < N; i++)
-        if (parts[i].y + parts[i].size < 60 || parts[i].y > 180)   // keep the text band clean
-          tft.fillRect(parts[i].x, parts[i].y, parts[i].size, parts[i].size, C_BG);
+        if (m[i].y + 12 < 50 || m[i].y > 185)       // keep the text band clean
+          tft.fillRect((int)m[i].x - 6, (int)m[i].y - 6, 18, 14, C_BG);
     }
     for (int i = 0; i < N; i++) {
-      Particle& p = parts[i];
-      p.y += p.vy; p.x += p.vx;
-      if (p.y > SCR_H) { p.y = -p.size; p.x = random(SCR_W); }
-      if (p.x < 0) p.x = SCR_W - 1;
-      if (p.x >= SCR_W) p.x = 0;
+      m[i].y += m[i].vy; m[i].x += m[i].vx;
+      if (m[i].y > SCR_H + 8) { m[i].y = -10; m[i].x = random(SCR_W); }
+      if (m[i].x < 0) m[i].x = SCR_W - 1;
+      if (m[i].x >= SCR_W) m[i].x = 0;
     }
     if (!useSpr) {
       for (int i = 0; i < N; i++)
-        if (parts[i].y + parts[i].size < 60 || parts[i].y > 180)
-          tft.fillRect(parts[i].x, parts[i].y, parts[i].size, parts[i].size, parts[i].color);
+        if (m[i].y + 12 < 50 || m[i].y > 185) drawMoney(tft, m[i]);
     }
     if (millis() > skipGuard && touch.tirqTouched() && touch.touched()) break;
     delay(30);
