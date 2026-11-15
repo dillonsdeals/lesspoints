@@ -777,6 +777,16 @@ static const GFXfont* fitFont(TFT_eSPI& g, const String& text, int maxW) {
   return fonts[3];
 }
 
+// Same as fitFont, but the font must fit both texts (so the two cards match).
+static const GFXfont* fitFont2(TFT_eSPI& g, const String& a, const String& b, int maxW) {
+  static const GFXfont* fonts[] = {FONT_B24, FONT_B18, FONT_B12, FONT_B9};
+  for (const GFXfont* f : fonts) {
+    g.setFreeFont(f);
+    if (g.textWidth(a) <= maxW && g.textWidth(b) <= maxW) return f;
+  }
+  return fonts[3];
+}
+
 // Draw through a sprite when there is memory for it, straight to the panel otherwise.
 struct Canvas {
   TFT_eSPI* g;
@@ -807,7 +817,7 @@ static void drawHeader() {
     titleS.toUpperCase();
   } else {
     titleS = view == VIEW_IG ? "INSTAGRAM" : view == VIEW_TT ? "TIKTOK" :
-             view == VIEW_TOTAL ? "TOTAL BALANCE" : DISPLAY_TITLE;
+             view == VIEW_TOTAL ? "TOTAL FOLLOWERS" : DISPLAY_TITLE;
     tcol = view == VIEW_IG ? C_IG : view == VIEW_TT ? C_TT : C_ACCENT_L;
   }
   const char* title = titleS.c_str();
@@ -907,7 +917,8 @@ static void drawCardInto(TFT_eSPI& g, int ox, int oy, const Platform& p, long sh
 
   long shown = (showCount == -2) ? p.count : showCount;
   String num = fmtNum(shown);
-  fitFont(g, num, CARD_W - 24);
+  const Platform& other = (&p == &ig) ? tt : ig;
+  fitFont2(g, num, fmtNum(other.count), CARD_W - 24);   // both cards share one size
   g.setTextDatum(MC_DATUM);
   g.setTextColor(p.ok || shown >= 0 ? C_TEXT : C_MUTED, C_CARD);
   g.drawString(num, ox + CARD_W / 2, oy + 64);
@@ -953,7 +964,7 @@ static void drawTotal(long showTotal, bool hideDelta) {
   g.drawString("$", cx, cy + 1);
   g.setTextDatum(ML_DATUM);
   g.setTextColor(C_TOTAL_MUTED, C_TOTAL);
-  g.drawString("TOTAL BALANCE", cx + 15, cy);
+  g.drawString("TOTAL FOLLOWERS", cx + 15, cy);
 
   long total = (showTotal == -2) ? currentTotal() : showTotal;
   long delta = (ig.source != SOURCE_OFF ? ig.delta : 0) + (tt.source != SOURCE_OFF ? tt.delta : 0);
