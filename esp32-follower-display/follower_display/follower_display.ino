@@ -274,6 +274,7 @@ static const WifiCred WIFI_LIST[] = {
 static const size_t WIFI_COUNT = sizeof(WIFI_LIST) / sizeof(WIFI_LIST[0]);
 static int wifiIdx = -1;                        // which entry we are connected to
 static unsigned long lastWifiUpgradeMs = 0;
+static String wifiHint;                         // why the last attempt failed, for the footer
 
 typedef bool (*FetchFn)(long& out, String& err);
 
@@ -1490,7 +1491,7 @@ static void fetchPlatform(Platform& p, JsonDocument& bridge, bool bridgeOk, cons
 
 static void fetchAll() {
   if (WiFi.status() != WL_CONNECTED) {
-    setFooter("No Wi-Fi, looking for: " + wifiNames(), true);
+    setFooter(wifiHint.length() ? wifiHint : "No Wi-Fi, looking for: " + wifiNames(), true);
     return;
   }
   setLed(false, false, true);
@@ -1949,17 +1950,32 @@ static void startWifi() {
   WiFi.setAutoReconnect(true);
 }
 
-static bool joinWifi(size_t i, uint32_t timeoutMs) {
-  Serial.printf("[wifi] joining '%s'\n", WIFI_LIST[i].ssid);
-  WiFi.begin(WIFI_LIST[i].ssid, WIFI_LIST[i].pass);
+// Network names compared loosely: curly and straight apostrophes are the same, case is ignored.
+static String plainSsid(String s) {
+  s.replace("\xE2\x80\x99", "'");   // ’
+  s.replace("\xE2\x80\x98", "'");   // ‘
+  s.toLowerCase();
+  s.trim();
+  return s;
+}
+static bool ssidMatch(const String& seen, const char* want) { return plainSsid(seen) == plainSsid(String(want)); }
+
+// `ssid` is the name as the router broadcasts it; `i` is the config entry whose password we use.
+static bool joinWifi(size_t i, const String& ssid, uint32_t timeoutMs) {
+  Serial.printf("[wifi] joining '%s'\n", ssid.c_str());
+  WiFi.begin(ssid.c_str(), WIFI_LIST[i].pass);
   unsigned long t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < timeoutMs) delay(100);
   if (WiFi.status() == WL_CONNECTED) {
     wifiIdx = i;
+    wifiHint = "";
     lastWifiUpgradeMs = millis();
     Serial.printf("[wifi] connected to '%s', IP %s\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
     return true;
   }
+  wl_status_t st = WiFi.status();
+  Serial.printf("[wifi] could not join '%s' (status %d)\n", ssid.c_str(), (int)st);
+  wifiHint = String("Found ") + ssid + (st == WL_CONNECT_FAILED ? " but the password was refused" : " but could not join");
   WiFi.disconnect();
   return false;
 }
@@ -1969,17 +1985,29 @@ static bool tryWifi(uint32_t timeoutMs) {
   lastWifiTryMs = millis();
   Serial.printf("[wifi] looking for: %s\n", wifiNames().c_str());
   int n = WiFi.scanNetworks();
+  Serial.printf("[wifi] %d networks nearby:", n);
+  for (int k = 0; k < n; k++) Serial.printf(" '%s'(%d)", WiFi.SSID(k).c_str(), WiFi.RSSI(k));
+  Serial.println();
+  bool seenAny = false;
   for (size_t i = 0; i < WIFI_COUNT; i++) {
     if (!WIFI_LIST[i].ssid || !*WIFI_LIST[i].ssid) continue;
-    bool seen = false;
-    for (int k = 0; k < n && !seen; k++) seen = WiFi.SSID(k) == WIFI_LIST[i].ssid;
-    if (!seen) continue;
+    String real;
+    for (int k = 0; k < n; k++) if (ssidMatch(WiFi.SSID(k), WIFI_LIST[i].ssid)) { real = WiFi.SSID(k); break; }
+    if (!real.length()) continue;
+    seenAny = true;
     WiFi.scanDelete();
-    if (joinWifi(i, timeoutMs)) return true;
+    if (joinWifi(i, real, timeoutMs)) return true;
     n = WiFi.scanNetworks();           // rescan before trying the next one
   }
   WiFi.scanDelete();
-  Serial.println("[wifi] none of the known networks are in range");
+  if (!seenAny) {
+    // Hidden network? Try the names blindly, briefly.
+    for (size_t i = 0; i < WIFI_COUNT; i++) {
+      if (WIFI_LIST[i].ssid && *WIFI_LIST[i].ssid && joinWifi(i, String(WIFI_LIST[i].ssid), timeoutMs / 2)) return true;
+    }
+    wifiHint = "Can't see " + wifiNames() + " nearby (2.4 GHz only)";
+    Serial.println("[wifi] none of the known networks are in range");
+  }
   return false;
 }
 
@@ -1991,19 +2019,20 @@ static void maybeUpgradeWifi() {
   lastWifiUpgradeMs = millis();
   int n = WiFi.scanNetworks();
   int best = -1;
+  String real;
   for (int i = 0; i < wifiIdx && best < 0; i++) {
     if (!WIFI_LIST[i].ssid || !*WIFI_LIST[i].ssid) continue;
     for (int k = 0; k < n; k++) {
-      if (WiFi.SSID(k) == WIFI_LIST[i].ssid && WiFi.RSSI(k) > -82) { best = i; break; }
+      if (ssidMatch(WiFi.SSID(k), WIFI_LIST[i].ssid) && WiFi.RSSI(k) > -82) { best = i; real = WiFi.SSID(k); break; }
     }
   }
   WiFi.scanDelete();
   if (best < 0) return;
-  Serial.printf("[wifi] preferred network '%s' is in range, switching\n", WIFI_LIST[best].ssid);
-  setFooter(String("Switching to ") + WIFI_LIST[best].ssid, false);
+  Serial.printf("[wifi] preferred network '%s' is in range, switching\n", real.c_str());
+  setFooter("Switching to " + real, false);
   WiFi.disconnect();
   delay(200);
-  if (!joinWifi(best, 12000)) tryWifi(8000);    // could not switch: fall back to whatever answers
+  if (!joinWifi(best, real, 12000)) tryWifi(8000);    // could not switch: fall back to whatever answers
   else setFooter("Connected to " + WiFi.SSID(), false);
   drawHeader();
 }
@@ -2012,7 +2041,7 @@ static void ensureWifi() {
   if (WiFi.status() == WL_CONNECTED) { maybeUpgradeWifi(); return; }
   // Phone hotspots come and go (the phone sleeps, you walk away...), so keep looking.
   if (millis() - lastWifiTryMs > 15000) {
-    setFooter("No Wi-Fi, looking for: " + wifiNames(), true);
+    setFooter(wifiHint.length() ? wifiHint : "No Wi-Fi, looking for: " + wifiNames(), true);
     if (tryWifi(8000)) {
       setFooter("Connected to " + WiFi.SSID(), false);
       forceRefresh = true;
