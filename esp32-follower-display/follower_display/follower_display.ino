@@ -97,6 +97,15 @@
 #ifndef WIFI_PASSWORD
 #define WIFI_PASSWORD ""
 #endif
+#ifndef ANIMATE_COUNT_UP
+#define ANIMATE_COUNT_UP 1          // numbers roll up when followers increase
+#endif
+#ifndef CELEBRATE_MILESTONES
+#define CELEBRATE_MILESTONES 1      // confetti when a count crosses a round number
+#endif
+#ifndef CELEBRATION_SECONDS
+#define CELEBRATION_SECONDS 6
+#endif
 #ifndef BROWSER_UA
 #define BROWSER_UA "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 #endif
@@ -174,6 +183,7 @@ struct Platform {
   uint16_t    accent;
   uint16_t    accent2;
   long        count;       // -1 = unknown
+  long        prev;        // value before the latest successful reading
   long        delta;       // change since the previous reading
   bool        ok;          // last fetch succeeded
   String      err;
@@ -186,9 +196,9 @@ static bool scrapeTikTok(long& out, String& err);
 static String wifiNames();
 
 Platform ig = {"Instagram", INSTAGRAM_USERNAME, INSTAGRAM_SOURCE, fetchInstagramApi, scrapeInstagram,
-               "instagram", "ig_last", C_IG, C_IG2, -1, 0, false, ""};
+               "instagram", "ig_last", C_IG, C_IG2, -1, -1, 0, false, ""};
 Platform tt = {"TikTok",    TIKTOK_USERNAME,    TIKTOK_SOURCE,    fetchTikTokApi,    scrapeTikTok,
-               "tiktok",    "tt_last", C_TT, C_TT2, -1, 0, false, ""};
+               "tiktok",    "tt_last", C_TT, C_TT2, -1, -1, 0, false, ""};
 
 static const unsigned long REFRESH_MS = (unsigned long)REFRESH_INTERVAL_MIN * 60UL * 1000UL;
 static unsigned long lastFetchMs   = 0;
@@ -596,10 +606,7 @@ static void drawFooter() {
   c.done();
 }
 
-static void drawCard(int x, const Platform& p) {
-  Canvas c(x, CARD_Y, CARD_W, CARD_H);
-  TFT_eSPI& g = *c.g;
-  int ox = c.ox, oy = c.oy;
+static void drawCardInto(TFT_eSPI& g, int ox, int oy, const Platform& p, long showCount, bool hideDelta) {
   g.fillRect(ox, oy, CARD_W, CARD_H, C_BG);
   g.fillRoundRect(ox, oy, CARD_W, CARD_H, 10, C_CARD);
   g.fillRoundRect(ox, oy, CARD_W, 8, 4, p.accent);
@@ -610,7 +617,6 @@ static void drawCard(int x, const Platform& p) {
     g.setTextFont(2); g.setTextDatum(MC_DATUM); g.setTextColor(C_MUTED, C_CARD);
     g.drawString(p.name, ox + CARD_W / 2, oy + CARD_H / 2 - 8);
     g.drawString("disabled", ox + CARD_W / 2, oy + CARD_H / 2 + 10);
-    c.done();
     return;
   }
 
@@ -624,10 +630,11 @@ static void drawCard(int x, const Platform& p) {
   while (g.textWidth(handle) > CARD_W - 20 && handle.length() > 3) handle.remove(handle.length() - 1);
   g.drawString(handle, ox + 10, oy + 32);
 
-  String num = fmtNum(p.count);
+  long shown = (showCount == -2) ? p.count : showCount;
+  String num = fmtNum(shown);
   fitFont(g, num, CARD_W - 16);
   g.setTextDatum(MC_DATUM);
-  g.setTextColor(p.ok || p.count >= 0 ? C_TEXT : C_MUTED, C_CARD);
+  g.setTextColor(p.ok || shown >= 0 ? C_TEXT : C_MUTED, C_CARD);
   g.drawString(num, ox + CARD_W / 2, oy + 66);
 
   g.setTextFont(2);
@@ -635,6 +642,8 @@ static void drawCard(int x, const Platform& p) {
   if (!p.ok && p.err.length()) {
     g.setTextColor(C_WARN, C_CARD);
     g.drawString(p.count >= 0 ? "update failed (old value)" : "update failed", ox + CARD_W / 2, oy + CARD_H - 6);
+  } else if (hideDelta) {
+    // animating: the change pops in once the number has finished rolling
   } else if (p.delta > 0) {
     g.setTextColor(C_GOOD, C_CARD);
     g.drawString("+" + fmtNum(p.delta), ox + CARD_W / 2, oy + CARD_H - 6);
@@ -642,6 +651,11 @@ static void drawCard(int x, const Platform& p) {
     g.setTextColor(C_BAD, C_CARD);
     g.drawString("-" + fmtNum(-p.delta), ox + CARD_W / 2, oy + CARD_H - 6);
   }
+}
+
+static void drawCard(int x, const Platform& p, long showCount = -2, bool hideDelta = false) {
+  Canvas c(x, CARD_Y, CARD_W, CARD_H);
+  drawCardInto(*c.g, c.ox, c.oy, p, showCount, hideDelta);
   c.done();
 }
 
@@ -652,7 +666,7 @@ static long currentTotal() {
   return any ? t : -1;
 }
 
-static void drawTotal() {
+static void drawTotal(long showTotal = -2, bool hideDelta = false) {
   Canvas c(0, TOTAL_Y, SCR_W, TOTAL_H);
   TFT_eSPI& g = *c.g;
   int ox = c.ox, oy = c.oy;
@@ -662,9 +676,9 @@ static void drawTotal() {
   g.setTextDatum(TL_DATUM);
   g.setTextColor(C_MUTED, C_TOTAL);
   g.drawString("TOTAL", ox + CARD_X1 + 10, oy + 6);
-  long total = currentTotal();
+  long total = (showTotal == -2) ? currentTotal() : showTotal;
   long delta = (ig.source != SOURCE_OFF ? ig.delta : 0) + (tt.source != SOURCE_OFF ? tt.delta : 0);
-  if (delta != 0) {
+  if (delta != 0 && !hideDelta) {
     g.setTextDatum(TR_DATUM);
     g.setTextColor(delta > 0 ? C_GOOD : C_BAD, C_TOTAL);
     g.drawString((delta > 0 ? "+" : "-") + fmtNum(labs(delta)), ox + SCR_W - CARD_X1 - 10, oy + 6);
@@ -703,6 +717,165 @@ static void splash(const String& line1, const String& line2) {
 }
 
 // =====================================================================
+//  Animations
+// =====================================================================
+static float easeOut(float t) { return 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t); }
+
+// Roll the numbers up from their previous values to the new ones.
+static void animateCountUp() {
+#if ANIMATE_COUNT_UP
+  bool igUp = ig.source != SOURCE_OFF && ig.ok && ig.prev >= 0 && ig.count > ig.prev;
+  bool ttUp = tt.source != SOURCE_OFF && tt.ok && tt.prev >= 0 && tt.count > tt.prev;
+  if (!igUp && !ttUp) return;
+  long totalTo   = currentTotal();
+  long totalFrom = totalTo - (igUp ? ig.count - ig.prev : 0) - (ttUp ? tt.count - tt.prev : 0);
+  const int frames = 36;
+  for (int f = 1; f <= frames; f++) {
+    float t = easeOut((float)f / frames);
+    if (igUp) drawCard(CARD_X1, ig, ig.prev + (long)((ig.count - ig.prev) * t + 0.5f), f < frames);
+    if (ttUp) drawCard(CARD_X2, tt, tt.prev + (long)((tt.count - tt.prev) * t + 0.5f), f < frames);
+    drawTotal(totalFrom + (long)((totalTo - totalFrom) * t + 0.5f), f < frames);
+    delay(25);
+  }
+#endif
+}
+
+static const uint16_t CONFETTI[] = {C_IG, C_IG2, C_TT, C_TT2, C_GOOD, TFT_YELLOW, TFT_WHITE, 0x7BFF, TFT_ORANGE};
+
+// A one-second burst of confetti out of a card plus a big "+N". Plays for every gain, even +1.
+static void miniCelebrate(int x, const Platform& p) {
+#if ANIMATE_COUNT_UP
+  struct Spark { float x, y, vx, vy; uint8_t size; uint16_t color; };
+  const int N = 28;
+  Spark sp[N];
+  for (int i = 0; i < N; i++) {
+    float a = random(628) / 100.0f, v = 2.0f + random(30) / 10.0f;
+    sp[i] = { CARD_W / 2.0f, 66.0f, cosf(a) * v, sinf(a) * v - 2.0f, (uint8_t)(2 + random(3)), CONFETTI[random(9)] };
+  }
+  String plus = "+" + fmtNum(p.delta);
+  const int frames = 32;
+  for (int f = 0; f < frames; f++) {
+    setLed(false, (f / 4) % 2 == 0, false);
+    Canvas c(x, CARD_Y, CARD_W, CARD_H);
+    TFT_eSPI& g = *c.g;
+    drawCardInto(g, c.ox, c.oy, p, -2, true);
+    for (int i = 0; i < N; i++) {
+      Spark& k = sp[i];
+      k.x += k.vx; k.y += k.vy; k.vy += 0.25f;              // a little gravity
+      if (k.x >= 0 && k.x < CARD_W && k.y >= 0 && k.y < CARD_H)
+        g.fillRect(c.ox + (int)k.x, c.oy + (int)k.y, k.size, k.size, k.color);
+    }
+    // the "+N" grows in, then holds
+    g.setTextDatum(MC_DATUM);
+    g.setFreeFont(f < 4 ? &FreeSansBold9pt7b : f < 8 ? &FreeSansBold12pt7b : &FreeSansBold18pt7b);
+    g.setTextColor(C_GOOD);
+    g.drawString(plus, c.ox + CARD_W / 2, c.oy + 66);
+    c.done();
+    delay(30);
+  }
+  setLed(false, false, false);
+#endif
+}
+
+// Round numbers worth celebrating: every 100 below 1k, 500 below 10k, 1k below 100k,
+// 10k below 1M, then every 100k.
+static long milestoneStep(long v) {
+  if (v < 1000)    return 100;
+  if (v < 10000)   return 500;
+  if (v < 100000)  return 1000;
+  if (v < 1000000) return 10000;
+  return 100000;
+}
+
+// The round number crossed going from `from` to `to`, or 0 if none.
+static long milestoneCrossed(long from, long to) {
+  if (from < 0 || to <= from) return 0;
+  long step = milestoneStep(to);
+  long m = (to / step) * step;
+  return (m > from) ? m : 0;
+}
+
+static void drawCelebrationText(TFT_eSPI& g, const String& who, const String& num) {
+  g.setTextDatum(MC_DATUM);
+  g.setFreeFont(&FreeSansBold9pt7b);
+  g.setTextColor(TFT_YELLOW);                     // no background colour: text floats over the confetti
+  g.drawString("NEW MILESTONE", SCR_W / 2, 72);
+  fitFont(g, num, SCR_W - 20);
+  g.setTextColor(TFT_WHITE);
+  g.drawString(num, SCR_W / 2, 118);
+  g.setFreeFont(&FreeSansBold12pt7b);
+  g.setTextColor(C_IG);
+  g.drawString(who + " followers", SCR_W / 2, 162);
+}
+
+// Full-screen confetti for a few seconds. Tap to skip.
+static void celebrate(const char* who, long value) {
+  Serial.printf("[milestone] %s %ld\n", who, value);
+  struct Particle { int16_t x, y; int8_t vx; uint8_t vy, size; uint16_t color; };
+  const int N = 70;
+  Particle parts[N];
+  for (int i = 0; i < N; i++) {
+    parts[i] = { (int16_t)random(SCR_W), (int16_t)(-random(SCR_H)), (int8_t)random(-1, 2),
+                 (uint8_t)(2 + random(4)), (uint8_t)(3 + random(4)), CONFETTI[random(9)] };
+  }
+  String num = fmtNum(value);
+  String who_s = who;
+
+  // A full-screen 8-bit sprite gives flicker-free frames; fall back to drawing straight to the panel.
+  spr.setColorDepth(8);
+  bool useSpr = spr.createSprite(SCR_W, SCR_H) != nullptr;
+  if (!useSpr) { tft.fillScreen(C_BG); drawCelebrationText(tft, who_s, num); }
+
+  unsigned long endAt = millis() + (unsigned long)CELEBRATION_SECONDS * 1000UL;
+  unsigned long skipGuard = millis() + 400;        // ignore the tap that may have triggered the refresh
+  uint8_t tick = 0;
+  while (millis() < endAt) {
+    uint8_t phase = (tick++ >> 3) % 3;
+    setLed(phase == 0, phase == 1, phase == 2);
+    if (useSpr) {
+      spr.fillSprite(C_BG);
+      for (int i = 0; i < N; i++) spr.fillRect(parts[i].x, parts[i].y, parts[i].size, parts[i].size, parts[i].color);
+      drawCelebrationText(spr, who_s, num);
+      spr.pushSprite(0, 0);
+    } else {
+      for (int i = 0; i < N; i++)
+        if (parts[i].y + parts[i].size < 60 || parts[i].y > 180)   // keep the text band clean
+          tft.fillRect(parts[i].x, parts[i].y, parts[i].size, parts[i].size, C_BG);
+    }
+    for (int i = 0; i < N; i++) {
+      Particle& p = parts[i];
+      p.y += p.vy; p.x += p.vx;
+      if (p.y > SCR_H) { p.y = -p.size; p.x = random(SCR_W); }
+      if (p.x < 0) p.x = SCR_W - 1;
+      if (p.x >= SCR_W) p.x = 0;
+    }
+    if (!useSpr) {
+      for (int i = 0; i < N; i++)
+        if (parts[i].y + parts[i].size < 60 || parts[i].y > 180)
+          tft.fillRect(parts[i].x, parts[i].y, parts[i].size, parts[i].size, parts[i].color);
+    }
+    if (millis() > skipGuard && touch.tirqTouched() && touch.touched()) break;
+    delay(30);
+  }
+  if (useSpr) spr.deleteSprite();
+  spr.setColorDepth(16);
+  setLed(false, false, false);
+  tft.fillScreen(C_BG);
+  drawAll();
+}
+
+static void checkMilestone(const char* key, const char* who, long from, long to, bool valid) {
+#if CELEBRATE_MILESTONES
+  if (!valid) return;
+  long m = milestoneCrossed(from, to);
+  if (!m) return;
+  if (prefs.getLong(key, 0) >= m) return;     // already celebrated this one
+  prefs.putLong(key, m);
+  celebrate(who, m);
+#endif
+}
+
+// =====================================================================
 //  Fetch orchestration
 // =====================================================================
 static void fetchPlatform(Platform& p, JsonDocument& bridge, bool bridgeOk, const String& bridgeErr) {
@@ -719,6 +892,7 @@ static void fetchPlatform(Platform& p, JsonDocument& bridge, bool bridgeOk, cons
   }
   if (ok) {
     if (p.count >= 0 && v != p.count) p.delta = v - p.count;
+    p.prev = p.count;
     p.count = v;
     p.ok = true;
     p.err = "";
@@ -758,11 +932,17 @@ static void fetchAll() {
   footerIsError = err.length() > 0;
 
   long total = currentTotal();
-  drawAll();
   setLed(false, false, false);
+  animateCountUp();
+  if (ig.source != SOURCE_OFF && ig.ok && ig.prev >= 0 && ig.count > ig.prev) miniCelebrate(CARD_X1, ig);
+  if (tt.source != SOURCE_OFF && tt.ok && tt.prev >= 0 && tt.count > tt.prev) miniCelebrate(CARD_X2, tt);
+  drawAll();
   if (lastTotal >= 0 && total > lastTotal) {
     for (int i = 0; i < 3; i++) { setLed(false, true, false); delay(120); setLed(false, false, false); delay(120); }
   }
+  checkMilestone("ms_ig",  "Instagram", ig.prev, ig.count, ig.source != SOURCE_OFF && ig.ok);
+  checkMilestone("ms_tt",  "TikTok",    tt.prev, tt.count, tt.source != SOURCE_OFF && tt.ok);
+  checkMilestone("ms_all", "Combined",  lastTotal, total,  lastTotal >= 0 && total >= 0);
   lastTotal = total;
   Serial.printf("[total] %ld  (free heap %u)\n", total, ESP.getFreeHeap());
 }
@@ -837,6 +1017,7 @@ void setup() {
   prefs.begin("followers", false);
   ig.count = prefs.getLong(ig.prefKey, -1);   // show the last known numbers right away
   tt.count = prefs.getLong(tt.prefKey, -1);
+  lastTotal = currentTotal();
 
   splash("Looking for Wi-Fi", wifiNames());
   startWifi();

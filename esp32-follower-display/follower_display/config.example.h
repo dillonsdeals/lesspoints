@@ -30,6 +30,11 @@
 //   London    "GMT0BST,M3.5.0/1,M10.5.0"  Berlin   "CET-1CEST,M3.5.0,M10.5.0/3"
 #define TZ_INFO "EST5EDT,M3.2.0,M11.1.0"
 
+// ---------------- Fun ----------------
+#define ANIMATE_COUNT_UP      1   // numbers roll up when you gain followers
+#define CELEBRATE_MILESTONES  1   // confetti when a count crosses a round number (100s, 500s, 1,000s...)
+#define CELEBRATION_SECONDS   6   // how long the confetti lasts (tap the screen to skip)
+
 // ---------------- Instagram ----------------
 // SOURCE_API    : official Instagram API (needs a Business/Creator account + access token, most reliable)
 // SOURCE_SCRAPE : reads instagram.com/<username>/ directly (no setup, but Instagram often shows a login wall)

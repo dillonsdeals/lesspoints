@@ -185,6 +185,21 @@ python3 bridge/follower_bridge.py --instagram yourhandle --tiktok yourhandle
 Then set the source(s) to `SOURCE_BRIDGE` and point `BRIDGE_URL` at
 `http://<that computer's IP>:8787/followers`. (On a hotspot the computer must be on the hotspot too.)
 
+## Animations
+
+* **Every new follower**: the number rolls up from the old value to the new one, then the card
+  bursts with confetti and a big green `+1` (or `+N`) for about a second, with the LED pulsing green.
+  The total rolls with it.
+* **Milestones**: when Instagram, TikTok or the combined total crosses a round number, the screen
+  fills with confetti showing the milestone for a few seconds and the LED cycles colours. Round
+  numbers are every 100 below 1,000, every 500 below 10,000, every 1,000 below 100,000, every
+  10,000 below a million, then every 100,000. Each milestone is celebrated once (remembered in flash),
+  and a milestone you crossed while the display was unplugged is celebrated on the next boot. Tap to
+  skip.
+
+Both can be switched off in `config.h` (`ANIMATE_COUNT_UP`, `CELEBRATE_MILESTONES`), and
+`CELEBRATION_SECONDS` sets the confetti length.
+
 ## Day-to-day
 
 * **Tap the screen** to refresh immediately.
